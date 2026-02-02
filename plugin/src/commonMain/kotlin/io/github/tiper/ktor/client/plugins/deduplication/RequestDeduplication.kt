@@ -1,6 +1,7 @@
 package io.github.tiper.ktor.client.plugins.deduplication
 
 import io.ktor.client.call.HttpClientCall
+import io.ktor.client.call.save
 import io.ktor.client.plugins.api.ClientPlugin
 import io.ktor.client.plugins.api.Send
 import io.ktor.client.plugins.api.createClientPlugin
