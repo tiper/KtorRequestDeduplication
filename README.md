@@ -13,7 +13,9 @@ When multiple components request the same resource simultaneously, only one actu
 - ✅ JVM (Java 8+)
 - ✅ Android (API 21+)
 - ✅ iOS (arm64, x64, simulatorArm64)
+- ✅ macOS (x64, arm64)
 - ✅ Linux (x64)
+- ✅ JavaScript (Browser, Node.js)
 
 ## Installation
 
@@ -111,7 +113,7 @@ The cache key is built from:
 - Full URL including query parameters
 - Request headers (excluding those in `excludeHeaders`)
 
-Headers are combined using XOR hashing to ensure order-independence and case sensitivity:
+Headers are combined using **polynomial rolling hash** to ensure order-independence and collision resistance:
 ```
 GET:https://api.example.com/users?id=123|h=1847563829
 ```
