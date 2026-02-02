@@ -165,7 +165,6 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         }
 
         try {
-            // Each caller gets its own clone; cancellations are isolated to that caller.
             entry.deferred.await().clone()
         } finally {
             mutex.withLock {
@@ -177,12 +176,13 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 }
 
 private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig): String {
-    // XOR all headers hashes so the order doesn't matter
-    // Whether headers arrive as [Auth, Accept] or [Accept, Auth], we get the same cache key
-    val headerHash = headers.entries().fold(0) { acc, (name, values) ->
-        if (name in config.excludeHeaders) acc
-        else acc xor "$name=${values.joinToString(",")}".hashCode()
-    }
+    val headerHash = headers.entries()
+        .filter { (name, _) -> name !in config.excludeHeaders }
+        .sortedBy { (name, _) -> name }
+        .fold(0) { acc, (name, values) ->
+            // Polynomial rolling hash
+            31 * acc + "$name=${values.joinToString(",")}".hashCode()
+        }
     return "${method.value}:${url.buildString()}|h=$headerHash"
 }
 
