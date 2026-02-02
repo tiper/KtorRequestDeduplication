@@ -138,7 +138,8 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     val config = pluginConfig
     val mutex = Mutex()
     val inFlight = mutableMapOf<String, InFlightEntry>()
-    val scope = CoroutineScope(SupervisorJob(client.coroutineContext[Job]) + client.coroutineContext)
+    // SupervisorJob must be rightmost so it becomes the effective Job element
+    val scope = CoroutineScope(client.coroutineContext + SupervisorJob(client.coroutineContext[Job]))
 
     on(Send) { request ->
         if (request.method !in config.deduplicateMethods) return@on proceed(request)
