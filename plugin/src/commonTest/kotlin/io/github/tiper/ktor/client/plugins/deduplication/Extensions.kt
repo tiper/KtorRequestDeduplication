@@ -8,15 +8,16 @@ import io.ktor.http.HttpStatusCode.Companion.OK
 import io.ktor.http.headersOf
 import kotlinx.coroutines.delay
 
-internal suspend fun simulateLatency() = delay(100)
+internal suspend fun simulateLatency(timeMillis: Long = 100) = delay(timeMillis)
 
 internal fun mockClient(
+    timeMillis: Long = 100,
     config: RequestDeduplicationConfig.() -> Unit = {},
     responseProvider: suspend () -> String,
 ) = HttpClient(MockEngine) {
     engine {
         addHandler {
-            simulateLatency()
+            simulateLatency(timeMillis)
             respond(
                 content = responseProvider(),
                 status = OK,

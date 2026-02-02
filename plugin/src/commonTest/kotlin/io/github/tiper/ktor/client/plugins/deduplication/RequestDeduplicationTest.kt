@@ -538,7 +538,7 @@ class RequestDeduplicationTest {
     @Test
     fun large_number_of_concurrent_requests_are_deduplicated() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient {
+        val client = mockClient(200) {
             "response-${requestCount.incrementAndGet()}"
         }
 
