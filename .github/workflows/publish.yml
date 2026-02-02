@@ -1,0 +1,47 @@
+name: Publish
+
+on:
+  push:
+    tags: [ "*" ]
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4.6.0
+        with:
+          distribution: "jetbrains"
+          java-version: 21
+          cache: "gradle"
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+
+      - name: Cache
+        uses: actions/cache@v4.2.0
+        with:
+          path: |
+            ~/.konan
+            /usr/local/lib/android/sdk/ndk
+          key: ${{ runner.os }}-kotlin-native-ndk-${{ hashFiles(
+            'gradle/libs.versions.toml',
+            'gradle.properties'
+            ) }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-native-ndk-
+
+      - name: Publish Plugin
+        env:
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.ORG_GRADLE_PROJECT_SIGNINGINMEMORYKEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.ORG_GRADLE_PROJECT_SIGNINGINMEMORYKEYPASSWORD }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.ORG_GRADLE_PROJECT_MAVENCENTRALPASSWORD }}
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.ORG_GRADLE_PROJECT_MAVENCENTRALUSERNAME }}
+        run: ./gradlew :plugin:publish

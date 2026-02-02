@@ -1,0 +1,41 @@
+name: Ktlint
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ktlint:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Setup Java
+        uses: actions/setup-java@v4.6.0
+        with:
+          distribution: "jetbrains"
+          java-version: 21
+          cache: "gradle"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache
+        uses: actions/cache@v4.2.0
+        with:
+          path: |
+            ~/.konan
+            /usr/local/lib/android/sdk/ndk
+          key: ${{ runner.os }}-kotlin-native-ndk-${{ hashFiles(
+            'gradle/libs.versions.toml',
+            'gradle.properties'
+            ) }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-native-ndk-
+
+      - name: Run ktlint Check
+        run: ./gradlew ktlintCheck
