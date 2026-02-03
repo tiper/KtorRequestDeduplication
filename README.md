@@ -23,11 +23,7 @@ Add the dependency to your `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    // For Ktor 2.x
     implementation("io.github.tiper:ktor-client-deduplication:2.0.0")
-
-    // For Ktor 3.x (coming soon)
-    // implementation("io.github.tiper:ktor-client-deduplication:3.0.0")
 }
 ```
 
