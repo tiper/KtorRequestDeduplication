@@ -1,23 +1,12 @@
 package io.github.tiper.ktor.client.plugins.deduplication
 
-import io.ktor.client.HttpClient
 import io.ktor.client.call.HttpClientCall
 import io.ktor.client.plugins.api.ClientPlugin
 import io.ktor.client.plugins.api.Send
 import io.ktor.client.plugins.api.createClientPlugin
-import io.ktor.client.request.HttpRequest
 import io.ktor.client.request.HttpRequestBuilder
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.readBytes
-import io.ktor.http.Headers
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpMethod.Companion.Get
-import io.ktor.http.HttpProtocolVersion
-import io.ktor.http.HttpStatusCode
-import io.ktor.util.InternalAPI
-import io.ktor.util.date.GMTDate
-import io.ktor.utils.io.ByteReadChannel
-import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -155,7 +144,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         if (isFirst) {
             entry.job = scope.launch {
                 try {
-                    proceed(request).clone().also(entry.deferred::complete)
+                    proceed(request).save().also(entry.deferred::complete)
                 } catch (e: Throwable) {
                     throw e.also(entry.deferred::completeExceptionally)
                 } finally {
@@ -165,7 +154,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         }
 
         try {
-            entry.deferred.await().clone()
+            entry.deferred.await()
         } finally {
             mutex.withLock {
                 entry.waiters -= 1
@@ -187,59 +176,7 @@ private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig)
 }
 
 private data class InFlightEntry(
-    val deferred: CompletableDeferred<SavedHttpCall> = CompletableDeferred(),
+    val deferred: CompletableDeferred<HttpClientCall> = CompletableDeferred(),
     var waiters: Int = 1,
     var job: Job? = null,
 )
-
-internal class SavedHttpCall(
-    client: HttpClient,
-    request: HttpRequest,
-    response: HttpResponse,
-    internal val responseBody: ByteArray,
-) : HttpClientCall(client) {
-
-    init {
-        this.request = SavedHttpRequest(this, request)
-        this.response = SavedHttpResponse(this, responseBody, response)
-    }
-
-    /**
-     * Returns a channel with [responseBody] data.
-     */
-    override suspend fun getResponseContent(): ByteReadChannel = ByteReadChannel(responseBody)
-
-    override val allowDoubleReceive: Boolean = true
-}
-
-internal class SavedHttpRequest(
-    override val call: SavedHttpCall,
-    origin: HttpRequest,
-) : HttpRequest by origin
-
-internal class SavedHttpResponse(
-    override val call: SavedHttpCall,
-    body: ByteArray,
-    origin: HttpResponse,
-) : HttpResponse() {
-    private val context = Job()
-
-    override val status: HttpStatusCode = origin.status
-
-    override val version: HttpProtocolVersion = origin.version
-
-    override val requestTime: GMTDate = origin.requestTime
-
-    override val responseTime: GMTDate = origin.responseTime
-
-    override val headers: Headers = origin.headers
-
-    override val coroutineContext: CoroutineContext = origin.coroutineContext + context
-
-    @OptIn(InternalAPI::class)
-    override val content: ByteReadChannel = ByteReadChannel(body)
-}
-
-internal fun SavedHttpCall.clone(): SavedHttpCall = SavedHttpCall(client, request, response, responseBody)
-
-internal suspend fun HttpClientCall.clone(): SavedHttpCall = SavedHttpCall(client, request, response, response.readBytes())
