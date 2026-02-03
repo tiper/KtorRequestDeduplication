@@ -1,5 +1,7 @@
 import com.vanniktech.maven.publish.SonatypeHost.Companion.CENTRAL_PORTAL
 import org.gradle.api.JavaVersion.VERSION_1_8
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -9,51 +11,60 @@ plugins {
 }
 
 group = "io.github.tiper"
-version = "2.0.0"
+version = "3.0.0"
 
 kotlin {
+
     // JVM & Android
     jvm()
     androidTarget {
         publishLibraryVariants("release")
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = "1.8"
-            }
+        @Suppress("OPT_IN_USAGE")
+        compilerOptions {
+            jvmTarget.set(JVM_1_8)
         }
     }
-
-    // iOS
-    iosX64()
-    iosArm64()
-    iosSimulatorArm64()
-
-    // tvOS
-    tvosX64()
-    tvosArm64()
-    tvosSimulatorArm64()
-
-    // watchOS
-    watchosArm32()
-    watchosArm64()
-    watchosX64()
-    watchosSimulatorArm64()
-
-    // macOS
-    macosX64()
-    macosArm64()
-
-    // Linux
-    linuxX64()
-
-    // Windows (MinGW)
-    mingwX64()
 
     // JavaScript
     js(IR) {
         browser()
         nodejs()
     }
+
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+        browser()
+        nodejs()
+    }
+
+    // Native targets
+    // See: https://kotlinlang.org/docs/native-target-support.html
+
+    // Tier 1
+    macosX64()
+    macosArm64()
+    iosArm64()
+    iosX64()
+    iosSimulatorArm64()
+
+    // Tier 2
+    linuxArm64()
+    linuxX64()
+    watchosArm32()
+    watchosArm64()
+    watchosX64()
+    watchosSimulatorArm64()
+    tvosArm64()
+    tvosX64()
+    tvosSimulatorArm64()
+
+    // Tier 3
+    androidNativeArm32()
+    androidNativeArm64()
+    androidNativeX86()
+    androidNativeX64()
+    mingwX64()
+    watchosDeviceArm64()
 
     sourceSets {
         val commonMain by getting {

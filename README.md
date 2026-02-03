@@ -5,10 +5,12 @@ A Kotlin Multiplatform library that prevents duplicate concurrent HTTP requests 
 When multiple components request the same resource simultaneously, only one actual HTTP request is executed, and all callers receive the same response. This optimizes network usage and reduces server load.
 
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.tiper/ktor-client-deduplication)](https://central.sonatype.com/artifact/io.github.tiper/ktor-client-deduplication)
-[![Kotlin](https://img.shields.io/badge/kotlin-1.9.20-blue.svg?logo=kotlin)](http://kotlinlang.org)
-[![Ktor](https://img.shields.io/badge/ktor-2.3.0+-orange.svg)](https://ktor.io)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.0.20-blue.svg?logo=kotlin)](http://kotlinlang.org)
+[![Ktor](https://img.shields.io/badge/ktor-3.0.0+-orange.svg)](https://ktor.io)
 
 ## Supported Platforms
+
+### Version 2.x.x (Ktor 2.3.0+)
 
 - ✅ JVM (Java 8+)
 - ✅ Android (API 21+)
@@ -17,24 +19,49 @@ When multiple components request the same resource simultaneously, only one actu
 - ✅ Linux (x64)
 - ✅ JavaScript (Browser, Node.js)
 
+### Version 3.x.x (Ktor 3.0.0+)
+
+All platforms from v2.x.x plus:
+
+- ✅ Android Native (arm32, arm64, x86, x64)
+- ✅ tvOS (x64, arm64, simulatorArm64)
+- ✅ watchOS (arm32, arm64, x64, simulatorArm64, deviceArm64)
+- ✅ Linux ARM64
+- ✅ Windows (mingwX64)
+- ✅ WebAssembly (wasmJs) - Browser and Node.js
+
+### ⚠️ IMPORTANT: Choose the correct version for your Ktor version!
+
+| If you use Ktor | Use plugin version |
+|---|---|
+| **2.3.0** to **2.x.x** | **2.x.x** ← Use this |
+| **3.0.0+** | **3.x.x** ← Use this |
+
+**Wrong version?** Your project will fail to compile with version mismatch errors.
+
 ## Installation
 
-Add the dependency to your `build.gradle.kts`:
+### Choose the version matching your Ktor version:
+
+#### For Ktor 2.3.0+
+
+Add to your `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("io.github.tiper:ktor-client-deduplication:2.0.0")
+    implementation("io.github.tiper:ktor-client-deduplication:2.x.x")
 }
 ```
 
-### Version Compatibility
+#### For Ktor 3.0.0+
 
-This library uses semantic versioning aligned with Ktor major versions:
+Add to your `build.gradle.kts`:
 
-| Plugin Version | Ktor Version | Support |
-|---|---|---|
-| 2.x.x | 2.3.0+ | ✅ Current |
-| 3.x.x | 3.0.0+ | 🔄 Planned |
+```kotlin
+dependencies {
+    implementation("io.github.tiper:ktor-client-deduplication:3.x.x")
+}
+```
 
 ## Quick Start
 
@@ -265,15 +292,40 @@ val client = mockClient {
 
 ## Version Compatibility
 
-Plugin versions are aligned with Ktor major versions for clarity:
+This library uses **semantic versioning aligned with Ktor major versions**:
 
-| Component | Minimum Version | Notes |
-|-----------|----------------|-------|
-| Plugin | 2.0.0+ | Version 2.x for Ktor 2.x; Version 3.x for Ktor 3.x |
-| Kotlin | 1.9.20+ | |
-| Ktor | 2.3.0+ (3.0.0+ for v3.x) | See version table above |
-| Android | API 21+ | |
-| JVM | Java 8+ | |
+| Plugin Version | Ktor Version | Kotlin Version |
+|---|---|----------------|---|---|
+| **2.x.x** | 2.3.0+ | 1.9.20+        |
+| **3.x.x** | 3.0.0+ | 2.0.20+        |
+
+### Platform Support
+
+Both versions support the same platforms:
+- ✅ JVM (Java 8+)
+- ✅ Android (API 21+)
+- ✅ iOS (arm64, x64, simulatorArm64)
+- ✅ macOS (x64, arm64)
+- ✅ Linux (x64)
+- ✅ JavaScript (Browser, Node.js)
+
+### Additional Platforms in v3.x.x
+
+Version 3.x additionally supports:
+
+**Apple Ecosystem:**
+- ✅ tvOS (x64, arm64, simulatorArm64)
+- ✅ watchOS (arm32, arm64, x64, simulatorArm64, deviceArm64)
+
+**Mobile:**
+- ✅ Android Native (arm32, arm64, x86, x64)
+
+**Desktop:**
+- ✅ Windows (mingwX64)
+- ✅ Linux ARM64
+
+**Web:**
+- ✅ WebAssembly (wasmJs) - Browser and Node.js
 
 ## License
 
