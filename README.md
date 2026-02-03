@@ -91,11 +91,12 @@ launch { client.get("https://api.example.com/users") }
 val client = HttpClient {
     // Install BEFORE if you want their effects in the cache key
     install(DefaultRequest) { ... }    // Headers add to cache key
+    install(Auth) { ... }              // Token adds to cache key
 
     install(RequestDeduplication)      // Deduplication based on above
 
     // Install AFTER if you don't want them affecting deduplication
-    install(Auth) { ... }              // Token adds to cache key
+    install(OtherAuth) { ... }         // Token that don't affect cache key
     install(Logging) { ... }           // Logs response, doesn't affect cache key
     install(HttpTimeout) { ... }       // Timeout applies after dedup
 }
