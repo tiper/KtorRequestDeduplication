@@ -116,7 +116,7 @@ android {
 mavenPublishing {
     publishToMavenCentral(CENTRAL_PORTAL)
     signAllPublications()
-    coordinates(group.toString(), "ktor-client-deduplication", version.toString())
+    coordinates(artifactId = "ktor-client-deduplication")
     pom {
         name = "Ktor Client Request Deduplication"
         description = "A Kotlin Multiplatform library that prevents duplicate concurrent HTTP requests in Ktor clients"

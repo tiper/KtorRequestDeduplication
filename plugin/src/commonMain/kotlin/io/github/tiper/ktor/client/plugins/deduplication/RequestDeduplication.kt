@@ -70,20 +70,31 @@ class RequestDeduplicationConfig {
  *
  * **⚠️ CRITICAL: Plugin Installation Order**
  *
- * This plugin **MUST be installed LAST** (or at least after any plugins that modify requests).
- * Plugins like Auth, DefaultRequest, and custom header plugins must be installed BEFORE
- * RequestDeduplication to ensure their modifications (tokens, headers, etc.) are included
- * in the deduplicated request.
+ * Plugin order matters! The order affects what gets included in the deduplication cache key.
  *
- * **Correct installation order:**
+ * **Plugins BEFORE RequestDeduplication:** Their modifications (headers, auth tokens, etc.)
+ * are included in the cache key. Use this for plugins you want to affect deduplication behavior.
+ *
+ * **Plugins AFTER RequestDeduplication:** Their modifications happen after deduplication,
+ * so they don't affect the cache key. Use this for plugins that shouldn't interfere.
+ *
+ * **Example:**
  * ```kotlin
  * val client = HttpClient {
- *     install(Auth) { ... }              // Auth adds tokens FIRST
- *     install(DefaultRequest) { ... }    // Default headers added
- *     install(Logging) { ... }           // Logging added
- *     install(RequestDeduplication)      // Deduplication LAST ✅
+ *     // Before: modifications included in cache key
+ *     install(DefaultRequest) { ... }    // Headers affect cache key
+ *     install(Auth) { ... }              // Token affects cache key
+ *
+ *     install(RequestDeduplication)      // Deduplication based on above
+ *
+ *     // After: don't affect cache key
+ *     install(OtherAuth) { ... }         // Token that doesn't affect cache key
+ *     install(Logging) { ... }           // Only logs, no effect on cache
+ *     install(HttpTimeout) { ... }       // Applied after dedup
  * }
  * ```
+ *
+ * Consider your requirements and test to ensure the order matches your expected behavior.
  *
  * **Use case:** Optimize scenarios where multiple components might request the same data simultaneously
  *

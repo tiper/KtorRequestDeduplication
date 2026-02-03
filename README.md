@@ -37,8 +37,6 @@ All platforms from v2.x.x plus:
 | **2.3.0** to **2.x.x** | **2.x.x** ← Use this |
 | **3.0.0+** | **3.x.x** ← Use this |
 
-**Wrong version?** Your project will fail to compile with version mismatch errors.
-
 ## Installation
 
 ### Choose the version matching your Ktor version:
@@ -83,24 +81,28 @@ launch { client.get("https://api.example.com/users") }
 
 ### ⚠️ Important: Plugin Installation Order
 
-**This plugin MUST be installed LAST** (or at least after any plugins that modify requests).
+**Plugin order matters!** The order affects what gets included in the deduplication cache key.
 
-Plugins like `Auth`, `DefaultRequest`, and custom header plugins must be installed **before** `RequestDeduplication` to ensure their modifications (tokens, headers, etc.) are included in the deduplicated request.
+- **Plugins BEFORE RequestDeduplication**: Their modifications (headers, auth tokens, etc.) are **included in the cache key**. Use this for plugins you want to affect deduplication behavior.
+- **Plugins AFTER RequestDeduplication**: Their modifications happen **after deduplication**, so they don't affect the cache key. Use this for plugins that shouldn't interfere with deduplication.
 
-**Correct installation order:**
+**Example:**
 ```kotlin
 val client = HttpClient {
-    install(Auth) {
-        bearer {
-            loadTokens { ... }
-        }
-    }
-    install(DefaultRequest) {
-        header("User-Agent", "MyApp/1.0")
-    }
-    install(RequestDeduplication)  // Install LAST ✅
+    // Install BEFORE if you want their effects in the cache key
+    install(DefaultRequest) { ... }    // Headers add to cache key
+    install(Auth) { ... }              // Token adds to cache key
+
+    install(RequestDeduplication)      // Deduplication based on above
+
+    // Install AFTER if you don't want them affecting deduplication
+    install(OtherAuth) { ... }         // Token that doesn't affect cache key
+    install(Logging) { ... }           // Logs response, doesn't affect cache key
+    install(HttpTimeout) { ... }       // Timeout applies after dedup
 }
 ```
+
+Consider your requirements and test to ensure the plugin order matches your expected behavior.
 
 ### Advanced Configuration
 
