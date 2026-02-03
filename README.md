@@ -37,8 +37,6 @@ All platforms from v2.x.x plus:
 | **2.3.0** to **2.x.x** | **2.x.x** ← Use this |
 | **3.0.0+** | **3.x.x** ← Use this |
 
-**Wrong version?** Your project will fail to compile with version mismatch errors.
-
 ## Installation
 
 ### Choose the version matching your Ktor version:
