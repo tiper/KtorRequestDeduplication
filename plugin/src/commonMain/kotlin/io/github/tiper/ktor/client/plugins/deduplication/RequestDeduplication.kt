@@ -88,7 +88,7 @@ class RequestDeduplicationConfig {
  *     install(RequestDeduplication)      // Deduplication based on above
  *
  *     // After: don't affect cache key
- *     install(OtherAuth) { ... }         // Token that don't affect cache key
+ *     install(OtherAuth) { ... }         // Token that doesn't affect cache key
  *     install(Logging) { ... }           // Only logs, no effect on cache
  *     install(HttpTimeout) { ... }       // Applied after dedup
  * }

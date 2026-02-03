@@ -96,7 +96,7 @@ val client = HttpClient {
     install(RequestDeduplication)      // Deduplication based on above
 
     // Install AFTER if you don't want them affecting deduplication
-    install(OtherAuth) { ... }         // Token that don't affect cache key
+    install(OtherAuth) { ... }         // Token that doesn't affect cache key
     install(Logging) { ... }           // Logs response, doesn't affect cache key
     install(HttpTimeout) { ... }       // Timeout applies after dedup
 }
