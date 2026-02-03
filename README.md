@@ -83,15 +83,27 @@ launch { client.get("https://api.example.com/users") }
 
 ### ⚠️ Important: Plugin Installation Order
 
-**Plugin order matters!** The order in which you install Ktor plugins affects behavior. Consider where to position `RequestDeduplication` based on your specific requirements and test your scenario to ensure the behavior meets your expectations.
+**Plugin order matters!** The order affects what gets included in the deduplication cache key.
 
+- **Plugins BEFORE RequestDeduplication**: Their modifications (headers, auth tokens, etc.) are **included in the cache key**. Use this for plugins you want to affect deduplication behavior.
+- **Plugins AFTER RequestDeduplication**: Their modifications happen **after deduplication**, so they don't affect the cache key. Use this for plugins that shouldn't interfere with deduplication.
+
+**Example:**
 ```kotlin
 val client = HttpClient {
-    // ... other plugins ...
-    install(RequestDeduplication)
-    // ... other plugins ...
+    // Install BEFORE if you want their effects in the cache key
+    install(DefaultRequest) { ... }    // Headers add to cache key
+
+    install(RequestDeduplication)      // Deduplication based on above
+
+    // Install AFTER if you don't want them affecting deduplication
+    install(Auth) { ... }              // Token adds to cache key
+    install(Logging) { ... }           // Logs response, doesn't affect cache key
+    install(HttpTimeout) { ... }       // Timeout applies after dedup
 }
 ```
+
+Consider your requirements and test to ensure the plugin order matches your expected behavior.
 
 ### Advanced Configuration
 
