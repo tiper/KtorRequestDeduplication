@@ -1,3 +1,4 @@
+import com.vanniktech.maven.publish.SonatypeHost.Companion.CENTRAL_PORTAL
 import org.gradle.api.JavaVersion.VERSION_1_8
 
 plugins {
@@ -102,7 +103,7 @@ android {
 }
 
 mavenPublishing {
-    publishToMavenCentral()
+    publishToMavenCentral(CENTRAL_PORTAL)
     signAllPublications()
     coordinates(group.toString(), "ktor-client-deduplication", version.toString())
     pom {
