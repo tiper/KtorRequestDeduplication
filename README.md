@@ -83,22 +83,13 @@ launch { client.get("https://api.example.com/users") }
 
 ### ⚠️ Important: Plugin Installation Order
 
-**This plugin MUST be installed LAST** (or at least after any plugins that modify requests).
+**Plugin order matters!** The order in which you install Ktor plugins affects behavior. Consider where to position `RequestDeduplication` based on your specific requirements and test your scenario to ensure the behavior meets your expectations.
 
-Plugins like `Auth`, `DefaultRequest`, and custom header plugins must be installed **before** `RequestDeduplication` to ensure their modifications (tokens, headers, etc.) are included in the deduplicated request.
-
-**Correct installation order:**
 ```kotlin
 val client = HttpClient {
-    install(Auth) {
-        bearer {
-            loadTokens { ... }
-        }
-    }
-    install(DefaultRequest) {
-        header("User-Agent", "MyApp/1.0")
-    }
-    install(RequestDeduplication)  // Install LAST ✅
+    // ... other plugins ...
+    install(RequestDeduplication)
+    // ... other plugins ...
 }
 ```
 

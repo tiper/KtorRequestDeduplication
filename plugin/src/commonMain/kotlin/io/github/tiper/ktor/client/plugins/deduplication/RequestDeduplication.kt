@@ -68,20 +68,17 @@ class RequestDeduplicationConfig {
  * - If all callers cancel, the in-flight request is cancelled to save resources
  * - The first caller runs in a supervisor scope to prevent cascading cancellations
  *
- * **⚠️ CRITICAL: Plugin Installation Order**
+ * **⚠️ IMPORTANT: Plugin Installation Order**
  *
- * This plugin **MUST be installed LAST** (or at least after any plugins that modify requests).
- * Plugins like Auth, DefaultRequest, and custom header plugins must be installed BEFORE
- * RequestDeduplication to ensure their modifications (tokens, headers, etc.) are included
- * in the deduplicated request.
+ * Plugin order matters! The order in which you install Ktor plugins affects behavior.
+ * Consider where to position RequestDeduplication based on your specific requirements and
+ * test your scenario to ensure the behavior meets your expectations.
  *
- * **Correct installation order:**
  * ```kotlin
  * val client = HttpClient {
- *     install(Auth) { ... }              // Auth adds tokens FIRST
- *     install(DefaultRequest) { ... }    // Default headers added
- *     install(Logging) { ... }           // Logging added
- *     install(RequestDeduplication)      // Deduplication LAST ✅
+ *     // ... other plugins ...
+ *     install(RequestDeduplication)
+ *     // ... other plugins ...
  * }
  * ```
  *
