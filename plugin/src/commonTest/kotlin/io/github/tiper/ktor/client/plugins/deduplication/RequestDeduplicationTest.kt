@@ -109,10 +109,7 @@ class RequestDeduplicationTest {
     fun test_POST_requests_can_be_deduplicated_when_configured() = runTest {
         val requestCount = atomic(0)
         val client = mockClient(
-            config = {
-                deduplicateMethods += Post
-                minWindow = 100
-            },
+            config = { deduplicateMethods += Post },
         ) {
             "response-${requestCount.incrementAndGet()}"
         }
@@ -182,7 +179,6 @@ class RequestDeduplicationTest {
         val client = mockClient(
             config = {
                 excludeHeaders = setOf("X-Trace-Id", "X-Request-Id")
-                minWindow = 100
             },
         ) {
             "response-${requestCount.incrementAndGet()}"
@@ -209,7 +205,6 @@ class RequestDeduplicationTest {
         val client = mockClient(
             config = {
                 excludeHeaders = setOf("X-Trace-Id")
-                minWindow = 100
             },
         ) {
             "response-${requestCount.incrementAndGet()}"
@@ -276,15 +271,13 @@ class RequestDeduplicationTest {
                 addHandler {
                     requestCount.incrementAndGet()
                     respond(
-                        content = "Not Found",
+                        content = "Not Found".also { simulateLatency() },
                         status = NotFound,
                         headers = headersOf(ContentType, "text/plain"),
                     )
                 }
             }
-            install(RequestDeduplication) {
-                minWindow = 100
-            }
+            install(RequestDeduplication)
         }
 
         val responses = List(3) {
@@ -305,8 +298,7 @@ class RequestDeduplicationTest {
         val requestCount = atomic(0)
         val client = mockClient(
             config = {
-                excludeHeaders = setOf("X-Trace-Id")
-                minWindow = 100
+                excludeHeaders = setOf("X-Trace-Id") // Exact case
             },
         ) {
             "response-${requestCount.incrementAndGet()}"
@@ -388,7 +380,11 @@ class RequestDeduplicationTest {
     @Test
     fun empty_exclude_headers_list_includes_all_headers_in_cache_key() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient {
+        val client = mockClient(
+            config = {
+                excludeHeaders = emptySet() // No exclusions
+            },
+        ) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -542,11 +538,7 @@ class RequestDeduplicationTest {
     @Test
     fun large_number_of_concurrent_requests_are_deduplicated() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = {
-                minWindow = 200
-            },
-        ) {
+        val client = mockClient(200) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -602,7 +594,6 @@ class RequestDeduplicationTest {
         val client = mockClient(
             config = {
                 excludeHeaders = setOf("X-Trace-Id", "X-Request-Id", "X-Session-Id")
-                minWindow = 100
             },
         ) {
             "response-${requestCount.incrementAndGet()}"
@@ -680,13 +671,12 @@ class RequestDeduplicationTest {
         val client = HttpClient(MockEngine) {
             engine {
                 addHandler {
+                    simulateLatency()
                     requestCount.incrementAndGet()
                     throw RuntimeException("Network error")
                 }
             }
-            install(RequestDeduplication) {
-                minWindow = 100
-            }
+            install(RequestDeduplication)
         }
 
         val jobs = List(3) {

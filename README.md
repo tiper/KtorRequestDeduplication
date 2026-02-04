@@ -172,7 +172,7 @@ Minimum deduplication window (in milliseconds). This adds an artificial delay to
 - Cached responses that return almost instantly
 - You want to maximize deduplication effectiveness for rapid requests
 
-**Trade-off:** Higher values increase deduplication effectiveness but add latency to ALL requests (even when there's only one).
+**Trade-off:** Higher values increase deduplication effectiveness but can add latency to fast requests by enforcing a minimum response window (slower requests are not delayed further)
 
 **Example:**
 ```kotlin
