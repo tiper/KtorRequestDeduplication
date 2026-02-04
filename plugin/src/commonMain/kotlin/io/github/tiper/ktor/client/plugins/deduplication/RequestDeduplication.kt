@@ -12,6 +12,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -48,6 +50,32 @@ class RequestDeduplicationConfig {
      * add both variants or check your SDK's documentation for the correct casing.
      */
     var excludeHeaders: Set<String> = emptySet()
+
+    /**
+     * Minimum deduplication window (in milliseconds).
+     *
+     * Adds an artificial delay to ensure fast responses (like errors or cached responses)
+     * wait long enough for concurrent requests to join the deduplication window.
+     *
+     * **Default:** 0 (no delay)
+     *
+     * **When to use:**
+     * - Fast error responses that complete before other concurrent requests arrive
+     * - Cached responses that return almost instantly
+     * - You want to maximize deduplication effectiveness for rapid requests
+     *
+     * **Trade-off:** Higher values increase deduplication effectiveness but add latency to ALL requests.
+     *
+     * **Example:**
+     * ```kotlin
+     * install(RequestDeduplication) {
+     *     minWindow = 50 // Wait at least 50ms before completing
+     * }
+     * ```
+     *
+     * **Recommended:** Start with 50-100ms if you have very fast responses and measure the impact.
+     */
+    var minWindow: Long = 0
 }
 
 /**
@@ -119,6 +147,10 @@ class RequestDeduplicationConfig {
  *             "traceparent",
  *             "tracestate"
  *         )
+ *
+ // Optional: Add minimum deduplication window for fast responses
+ // Useful when error responses or cached data return very quickly
+ minWindow = 50 // milliseconds (default: 0)
  *     }
  * }
  * ```
@@ -156,7 +188,9 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         if (isFirst) {
             entry.job = scope.launch {
                 try {
-                    proceed(request).save().also(entry.deferred::complete)
+                    async { proceed(request).save() }.also {
+                        delay(config.minWindow)
+                    }.await().also(entry.deferred::complete)
                 } catch (e: Throwable) {
                     throw e.also(entry.deferred::completeExceptionally)
                 } finally {
