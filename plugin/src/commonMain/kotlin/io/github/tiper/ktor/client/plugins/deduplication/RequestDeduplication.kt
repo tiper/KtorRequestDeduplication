@@ -176,6 +176,16 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     // SupervisorJob must be rightmost so it becomes the effective Job element
     val scope = CoroutineScope(client.coroutineContext + SupervisorJob(client.coroutineContext[Job]))
 
+    val direct: suspend CoroutineScope.(Send.Sender, HttpRequestBuilder) -> HttpClientCall = { sender, request ->
+        sender.proceed(request).save()
+    }
+
+    val proceed = if (config.minWindow < 1) direct else { sender, request ->
+        async { direct(sender, request) }.also {
+            delay(config.minWindow)
+        }.await()
+    }
+
     on(Send) { request ->
         if (request.method !in config.deduplicateMethods) return@on proceed(request)
 
@@ -190,9 +200,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         if (isFirst) {
             entry.job = scope.launch {
                 try {
-                    async { proceed(request).save() }.also {
-                        delay(config.minWindow)
-                    }.await().also(entry.deferred::complete)
+                    proceed(this@on, request).also(entry.deferred::complete)
                 } catch (e: Throwable) {
                     throw e.also(entry.deferred::completeExceptionally)
                 } finally {
