@@ -64,7 +64,9 @@ class RequestDeduplicationConfig {
      * - Cached responses that return almost instantly
      * - You want to maximize deduplication effectiveness for rapid requests
      *
-     * **Trade-off:** Higher values increase deduplication effectiveness but add latency to ALL requests.
+     * **Trade-off:** Higher values increase deduplication effectiveness but primarily add latency
+     * to fast responses (and errors) that would otherwise complete sooner than [minWindow], without
+     * adding extra delay to already-slow requests.
      *
      * **Example:**
      * ```kotlin
@@ -148,9 +150,9 @@ class RequestDeduplicationConfig {
  *             "tracestate"
  *         )
  *
- // Optional: Add minimum deduplication window for fast responses
- // Useful when error responses or cached data return very quickly
- minWindow = 50 // milliseconds (default: 0)
+ *         // Optional: Add minimum deduplication window for fast responses
+ *         // Useful when error responses or cached data return very quickly
+ *         minWindow = 50 // milliseconds (default: 0)
  *     }
  * }
  * ```

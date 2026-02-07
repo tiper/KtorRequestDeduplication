@@ -3,6 +3,7 @@ package io.github.tiper.ktor.client.plugins.deduplication
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.respondError
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -10,6 +11,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders.ContentType
 import io.ktor.http.HttpMethod.Companion.Post
+import io.ktor.http.HttpStatusCode.Companion.InternalServerError
 import io.ktor.http.HttpStatusCode.Companion.NotFound
 import io.ktor.http.headersOf
 import kotlin.test.Test
@@ -694,23 +696,96 @@ class RequestDeduplicationTest {
             }
         }
 
+        // Launch first request
         val job1 = async { client.get("https://api.example.com/users") }
+
+        // Launch second request after short delay (should join the window)
         delay(10)
         val job2 = async { client.get("https://api.example.com/users") }
+
         val responses = listOf(job1, job2).awaitAll()
 
+        // Both should be deduplicated because minWindow keeps the window open
         assertEquals(1, requestCount.value, "Expected deduplication with minWindow")
         responses.forEach { assertEquals("fast-response", it.bodyAsText()) }
     }
 
     @Test
-    fun minWindow_allows_staggered_requests_to_join() = runTest {
+    fun minWindow_honored_even_when_request_fails() = runTest {
         val requestCount = atomic(0)
         val client = HttpClient(MockEngine) {
             engine {
                 addHandler {
                     requestCount.incrementAndGet()
-                    respond("fast-response")
+                    respondError(InternalServerError, "Server error")
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 100
+            }
+        }
+
+        val job1 = async { client.get("https://api.example.com/users") }
+        delay(20)
+        val job2 = async { client.get("https://api.example.com/users") }
+        val responses = listOf(job1, job2).awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected deduplication with minWindow even for errors")
+        responses.forEach { response ->
+            assertEquals(InternalServerError, response.status)
+        }
+    }
+
+    @Test
+    fun minWindow_honored_when_exception_thrown() = runTest {
+        val requestCount = atomic(0)
+        val exceptionMessage = "Network timeout"
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    throw RuntimeException(exceptionMessage)
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 100
+            }
+        }
+
+        val job1 = async {
+            try {
+                client.get("https://api.example.com/users")
+                "success"
+            } catch (e: RuntimeException) {
+                e.message
+            }
+        }
+        delay(30)
+        val job2 = async {
+            try {
+                client.get("https://api.example.com/users")
+                "success"
+            } catch (e: RuntimeException) {
+                e.message
+            }
+        }
+
+        val results = listOf(job1, job2).awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected deduplication with minWindow even for exceptions")
+        results.forEach { result ->
+            assertEquals(exceptionMessage, result)
+        }
+    }
+
+    @Test
+    fun minWindow_allows_multiple_requests_to_join_on_error() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    respondError(NotFound, "Not found")
                 }
             }
             install(RequestDeduplication) {
@@ -723,11 +798,12 @@ class RequestDeduplicationTest {
         val job2 = async { client.get("https://api.example.com/users") }
         delay(30)
         val job3 = async { client.get("https://api.example.com/users") }
+
         val responses = listOf(job1, job2, job3).awaitAll()
 
-        assertEquals(1, requestCount.value, "Expected only 1 network request with minWindow")
+        assertEquals(1, requestCount.value, "Expected all requests deduplicated on error with minWindow")
         responses.forEach { response ->
-            assertEquals("fast-response", response.bodyAsText())
+            assertEquals(NotFound, response.status)
         }
     }
 }
