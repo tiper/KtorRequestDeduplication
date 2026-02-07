@@ -7,7 +7,7 @@ coroutines = "1.9.0"
 kotlin = "2.0.20" # https://github.com/JetBrains/kotlin/releases
 ktor = "3.0.0" #https://github.com/ktorio/ktor-build-plugins/releases
 ktlint-gradle = "14.0.1" # https://github.com/JLLeitschuh/ktlint-gradle/releases
-slf4j = "1.7.36"
+slf4j = "2.0.17"
 
 [libraries]
 atomicfu = { module = "org.jetbrains.kotlinx:atomicfu", version.ref = "atomicfu" }

@@ -109,10 +109,10 @@ Consider your requirements and test to ensure the plugin order matches your expe
 ```kotlin
 val client = HttpClient {
     install(RequestDeduplication) {
-        // Deduplicate both GET and HEAD requests, or add POST if needed
+        // Deduplicate both GET and HEAD requests
         deduplicateMethods = setOf(HttpMethod.Get, HttpMethod.Head)
-        // You can also add HttpMethod.Post if you want POST deduplication
-        // excludeHeaders: exclude tracing/telemetry headers from cache key computation
+
+        // Exclude tracing/telemetry headers from cache key computation
         excludeHeaders = setOf(
             "X-Trace-Id",
             "X-Request-Id",
@@ -120,6 +120,10 @@ val client = HttpClient {
             "traceparent",
             "tracestate"
         )
+
+        // Optional: Add minimum deduplication window for fast responses
+        // Useful when error responses or cached data return very quickly
+        // minWindow = 50 // milliseconds (default: 0)
     }
 }
 ```
@@ -155,6 +159,29 @@ HTTP methods to deduplicate. Typically you only want to deduplicate idempotent m
 ```kotlin
 deduplicateMethods = setOf(HttpMethod.Get, HttpMethod.Head, HttpMethod.Post)
 ```
+
+### `minWindow`
+
+**Type:** `Long` (milliseconds)
+**Default:** `0` (no delay)
+
+Minimum deduplication window (in milliseconds). This adds an artificial delay to ensure fast responses (like errors or cached responses) wait long enough for concurrent requests to join the deduplication window.
+
+**When to use:**
+- Fast error responses that complete before other concurrent requests arrive
+- Cached responses that return almost instantly
+- You want to maximize deduplication effectiveness for rapid requests
+
+**Trade-off:** Higher values increase deduplication effectiveness but can add latency to fast requests by enforcing a minimum response window (slower requests are not delayed further)
+
+**Example:**
+```kotlin
+install(RequestDeduplication) {
+    minWindow = 50 // Wait at least 50ms before completing
+}
+```
+
+**Recommended:** Start with 50-100ms if you have very fast responses and measure the impact.
 
 ### `excludeHeaders`
 

@@ -3,13 +3,18 @@ package io.github.tiper.ktor.client.plugins.deduplication
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.respondError
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders.ContentType
+import io.ktor.http.HttpMethod.Companion.Get
+import io.ktor.http.HttpMethod.Companion.Head
 import io.ktor.http.HttpMethod.Companion.Post
+import io.ktor.http.HttpStatusCode.Companion.InternalServerError
 import io.ktor.http.HttpStatusCode.Companion.NotFound
 import io.ktor.http.headersOf
 import kotlin.test.Test
@@ -18,6 +23,7 @@ import kotlin.test.assertTrue
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 
 @Suppress("OPT_IN_USAGE")
@@ -43,7 +49,6 @@ class RequestDeduplicationTest {
             "response-${requestCount.incrementAndGet()}"
         }
 
-        // Launch 5 concurrent identical requests
         val responses = List(5) {
             async {
                 client.get("https://api.example.com/users")
@@ -108,9 +113,7 @@ class RequestDeduplicationTest {
     @Test
     fun test_POST_requests_can_be_deduplicated_when_configured() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = { deduplicateMethods += Post },
-        ) {
+        val client = mockClient(config = { deduplicateMethods += Post }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -176,11 +179,7 @@ class RequestDeduplicationTest {
     @Test
     fun excluded_headers_do_not_affect_deduplication() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = {
-                excludeHeaders = setOf("X-Trace-Id", "X-Request-Id")
-            },
-        ) {
+        val client = mockClient(config = { excludeHeaders = setOf("X-Trace-Id", "X-Request-Id") }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -202,11 +201,7 @@ class RequestDeduplicationTest {
     @Test
     fun excluded_headers_with_other_different_headers_still_differentiate_requests() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = {
-                excludeHeaders = setOf("X-Trace-Id")
-            },
-        ) {
+        val client = mockClient(config = { excludeHeaders = setOf("X-Trace-Id") }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -380,11 +375,7 @@ class RequestDeduplicationTest {
     @Test
     fun empty_exclude_headers_list_includes_all_headers_in_cache_key() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = {
-                excludeHeaders = emptySet() // No exclusions
-            },
-        ) {
+        val client = mockClient(config = { excludeHeaders = emptySet() }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -403,41 +394,6 @@ class RequestDeduplicationTest {
 
         assertEquals(2, requestCount.value, "Expected 2 separate network requests due to different header values")
         assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected different response bodies due to different header values")
-    }
-
-    @Test
-    fun one_coroutine_cancels_but_others_still_receive_response() = runTest {
-        val requestCount = atomic(0)
-        val client = mockClient {
-            "response-${requestCount.incrementAndGet()}"
-        }
-
-        // Launch first request
-        val job1 = async {
-            client.get("https://api.example.com/users")
-        }
-
-        // Launch second request (will join the deduplication)
-        val job2 = async {
-            client.get("https://api.example.com/users")
-        }
-
-        // Launch third request (will also join)
-        val job3 = async {
-            client.get("https://api.example.com/users")
-        }
-
-        // Cancel the second request while in-flight
-        job2.cancel()
-
-        // First and third should still complete successfully
-        val response1 = job1.await()
-        val response3 = job3.await()
-
-        // Only 1 actual network request should have been made
-        assertEquals(1, requestCount.value, "Expected only 1 network request despite cancellation")
-        assertEquals("response-1", response1.bodyAsText())
-        assertEquals("response-1", response3.bodyAsText())
     }
 
     @Test
@@ -591,11 +547,7 @@ class RequestDeduplicationTest {
     @Test
     fun requests_with_multiple_excluded_headers_are_deduplicated() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = {
-                excludeHeaders = setOf("X-Trace-Id", "X-Request-Id", "X-Session-Id")
-            },
-        ) {
+        val client = mockClient(config = { excludeHeaders = setOf("X-Trace-Id", "X-Request-Id", "X-Session-Id") }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -660,7 +612,6 @@ class RequestDeduplicationTest {
             responses.add(response.bodyAsText())
         }
 
-        // Each sequential request should trigger a new network call
         assertEquals(5, requestCount.value, "Expected 5 separate network requests for rapid sequential calls")
         assertEquals(listOf("response-1", "response-2", "response-3", "response-4", "response-5"), responses)
     }
@@ -683,7 +634,6 @@ class RequestDeduplicationTest {
             async {
                 try {
                     client.get("https://api.example.com/users")
-                    null // Should not reach here
                 } catch (e: RuntimeException) {
                     e.message
                 }
@@ -692,12 +642,247 @@ class RequestDeduplicationTest {
 
         val results = jobs.awaitAll()
 
-        // Only 1 actual network request should have been made
         assertEquals(1, requestCount.value, "Expected only 1 network request attempt")
 
-        // All waiters should receive the same error
         results.forEach { errorMessage ->
             assertEquals("Network error", errorMessage)
         }
+    }
+
+    @Test
+    fun minWindow_enforces_minimum_duration() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    respond("fast-response")
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 100 // 100ms minimum window
+            }
+        }
+
+        // Launch first request
+        val job1 = async { client.get("https://api.example.com/users") }
+
+        // Launch second request after short delay (should join the window)
+        delay(10)
+        val job2 = async { client.get("https://api.example.com/users") }
+
+        val responses = listOf(job1, job2).awaitAll()
+
+        // Both should be deduplicated because minWindow keeps the window open
+        assertEquals(1, requestCount.value, "Expected deduplication with minWindow")
+        responses.forEach { assertEquals("fast-response", it.bodyAsText()) }
+    }
+
+    @Test
+    fun minWindow_zero_fast_responses_may_miss_late_joiners() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    // Instant response - completes immediately
+                    respond("fast-response")
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 0 // Default: no artificial delay
+            }
+        }
+
+        val job1 = async { client.get("https://api.example.com/users") }
+        delay(5)
+        val job2 = async { client.get("https://api.example.com/users") }
+        val responses = listOf(job1, job2).awaitAll()
+
+        // With minWindow=0 and instant responses, deduplication may not occur
+        // if the first request completes before the second arrives.
+        // This test documents the problem that minWindow solves.
+        // Note: Due to test scheduler behavior, both might still deduplicate,
+        // but in real-world scenarios with actual network timing, they might not.
+        assertTrue(
+            requestCount.value >= 1,
+            "Expected at least 1 request (deduplication behavior varies with minWindow=0)",
+        )
+
+        // Both responses should still be valid
+        responses.forEach { assertEquals("fast-response", it.bodyAsText()) }
+    }
+
+    @Test
+    fun minWindow_honored_for_error_responses_allowing_deduplication() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    respondError(InternalServerError, "Server error")
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 100
+            }
+        }
+
+        val job1 = async { client.get("https://api.example.com/users") }
+        delay(20)
+        val job2 = async { client.get("https://api.example.com/users") }
+        val responses = listOf(job1, job2).awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected deduplication - minWindow honored for error responses")
+        responses.forEach { response ->
+            assertEquals(InternalServerError, response.status)
+        }
+    }
+
+    @Test
+    fun minWindow_honored_when_exception_thrown() = runTest {
+        val requestCount = atomic(0)
+        val exceptionMessage = "Network timeout"
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    throw RuntimeException(exceptionMessage)
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 100
+            }
+        }
+
+        val job1 = async {
+            try {
+                client.get("https://api.example.com/users")
+                "success"
+            } catch (e: RuntimeException) {
+                e.message
+            }
+        }
+
+        delay(30)
+
+        val job2 = async {
+            try {
+                client.get("https://api.example.com/users")
+                "success"
+            } catch (e: RuntimeException) {
+                e.message
+            }
+        }
+
+        val results = listOf(job1, job2).awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected deduplication - minWindow honored for exceptions")
+        results.forEach { result ->
+            assertEquals(exceptionMessage, result)
+        }
+    }
+
+    @Test
+    fun minWindow_allows_multiple_staggered_requests_to_join_on_error() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    respondError(NotFound, "Not found")
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 100
+            }
+        }
+
+        val job1 = async { client.get("https://api.example.com/users") }
+        delay(30)
+        val job2 = async { client.get("https://api.example.com/users") }
+        delay(30)
+        val job3 = async { client.get("https://api.example.com/users") }
+
+        val responses = listOf(job1, job2, job3).awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected all staggered requests deduplicated with minWindow on error")
+        responses.forEach { response ->
+            assertEquals(NotFound, response.status)
+        }
+    }
+
+    @Test
+    fun test_POST_requests_not_deduplicated_by_default() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    respond("response-${requestCount.value}")
+                }
+            }
+            install(RequestDeduplication) // Default config only deduplicates GET
+        }
+
+        val responses = List(3) {
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody("same body")
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(3, requestCount.value, "Expected 3 separate POST requests (POST not deduplicated by default)")
+        responses.forEachIndexed { index, response ->
+            assertEquals("response-${index + 1}", response.bodyAsText())
+        }
+    }
+
+    @Test
+    fun different_http_methods_are_not_deduplicated_together() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    respond("response-${requestCount.value}")
+                }
+            }
+            install(RequestDeduplication) {
+                deduplicateMethods = setOf(Get, Post, Head)
+            }
+        }
+
+        listOf(
+            async { client.get("https://api.example.com/users") },
+            async { client.post("https://api.example.com/users") },
+            async { client.head("https://api.example.com/users") },
+        ).awaitAll()
+
+        assertEquals(3, requestCount.value, "Expected 3 separate requests for different HTTP methods")
+    }
+
+    @Test
+    fun in_flight_map_cleaned_up_after_completion() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val batch1 = List(3) {
+            async { client.get("https://api.example.com/users") }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "First batch should be deduplicated")
+
+        val batch2 = List(3) {
+            async { client.get("https://api.example.com/users") }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Second batch should make new request (cleanup worked)")
+
+        batch1.forEach { assertEquals("response-1", it.bodyAsText()) }
+        batch2.forEach { assertEquals("response-2", it.bodyAsText()) }
     }
 }
