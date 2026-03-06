@@ -906,25 +906,23 @@ class RequestDeduplicationTest {
             install(RequestDeduplication)
         }
 
-        // Start 5 concurrent requests; job0 will become the leader.
         val jobs = List(5) { async { client.get("https://api.example.com/users") } }
 
-        // Let all coroutines run until they are all suspended on gate.await().
+        // Let all coroutines run until they are all suspended
         testScheduler.advanceUntilIdle()
 
-        // Cancel the leader while it (and all waiters) are still blocked on the gate.
+        // Cancel the leader while all waiters are still blocked
         jobs[0].cancel()
 
-        // Open the gate. The cancelled leader's coroutine ignores the resume and throws
-        // CancellationException. The 4 survivors loop back and re-enter deduplication:
-        // one becomes the new leader, the other 3 re-join as waiters.
+        // The cancelled leader's coroutine ignores the resume and throws CancellationException.
+        // The 4 waiters loop back and re-enter deduplication: one becomes the new leader, the other 3 re-join as waiters.
         gate.complete(Unit)
         testScheduler.advanceUntilIdle()
 
         val responses = jobs.drop(1).awaitAll()
 
         // The cancelled leader never reached requestCount.incrementAndGet(), so the
-        // deduplicated retry is the only real HTTP call: requestCount == 1, not 4.
+        // deduplicated retry is the only real HTTP call-.
         assertEquals(1, requestCount.value, "Surviving waiters must retry as one deduplicated group, not individually")
         responses.forEach { assertEquals("response-1", it.bodyAsText()) }
     }

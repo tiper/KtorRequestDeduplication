@@ -180,49 +180,39 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         deferred.await()
     }
 
-    on(Send) { request ->
-        if (request.method !in config.deduplicateMethods) return@on proceed(request)
+    suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: String): HttpClientCall {
+        val (isFirst, entry) = mutex.withLock {
+            val existing = inFlight[cacheKey]
+            if (existing != null) false to existing.also { it.waiters += 1 }
+            else true to InFlightEntry().also { inFlight[cacheKey] = it }
+        }
 
-        val cacheKey = request.buildCacheKey(config)
-
-        while (true) {
-            val (isFirst, entry) = mutex.withLock {
-                val existing = inFlight[cacheKey]
-                if (existing != null) false to existing.also { it.waiters += 1 }
-                else true to InFlightEntry().also { inFlight[cacheKey] = it }
-            }
-
-            if (isFirst) {
-                try {
-                    return@on execute(request).also(entry.deferred::complete)
-                } catch (e: Throwable) {
-                    throw e.also(entry.deferred::completeExceptionally)
-                } finally {
-                    mutex.withLock { if (inFlight[cacheKey] === entry) inFlight.remove(cacheKey) }
-                }
-            }
-
+        if (isFirst) {
             try {
-                return@on entry.deferred.await()
-            } catch (e: CancellationException) {
-                // The leader was cancelled. If this coroutine is still alive, loop back so
-                // that one survivor becomes the new leader and the rest re-join as waiters,
-                // preserving deduplication across the retry instead of every waiter calling
-                // execute() independently and issuing N separate HTTP calls.
-                if (!isActive) throw e
-                // fall through to next loop iteration
+                return execute(request).also(entry.deferred::complete)
+            } catch (e: Throwable) {
+                throw e.also(entry.deferred::completeExceptionally)
             } finally {
-                mutex.withLock {
-                    entry.waiters -= 1
-                    // On cancellation: remove once the last waiter is done.
-                    // On real error: leader's finally already removed it; === guard is a no-op.
-                    if (entry.waiters == 0 && inFlight[cacheKey] === entry) inFlight.remove(cacheKey)
-                }
+                mutex.withLock { if (inFlight[cacheKey] === entry) inFlight.remove(cacheKey) }
             }
         }
 
-        @Suppress("UNREACHABLE_CODE")
-        error("unreachable")
+        try {
+            return entry.deferred.await()
+        } catch (e: CancellationException) {
+            if (!coroutineContext.isActive) throw e
+            return deduplicate(request, cacheKey)
+        } finally {
+            mutex.withLock {
+                if (entry.waiters == 1 && inFlight[cacheKey] === entry) inFlight.remove(cacheKey)
+                else entry.waiters -= 1
+            }
+        }
+    }
+
+    on(Send) { request ->
+        if (request.method !in config.deduplicateMethods) return@on proceed(request)
+        deduplicate(request, request.buildCacheKey(config))
     }
 }
 
