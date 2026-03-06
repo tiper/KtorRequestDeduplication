@@ -8,13 +8,11 @@ import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpMethod.Companion.Get
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -173,17 +171,13 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     val config = pluginConfig
     val mutex = Mutex()
     val inFlight = mutableMapOf<String, InFlightEntry>()
-    // SupervisorJob must be rightmost so it becomes the effective Job element
-    val scope = CoroutineScope(client.coroutineContext + SupervisorJob(client.coroutineContext[Job]))
 
-    val direct: suspend CoroutineScope.(Send.Sender, HttpRequestBuilder) -> HttpClientCall = { sender, request ->
-        sender.proceed(request).save()
-    }
-
-    val proceed = if (config.minWindow < 1) direct else { sender, request ->
-        async { direct(sender, request) }.also {
-            delay(config.minWindow)
-        }.await()
+    suspend fun Send.Sender.execute(request: HttpRequestBuilder): HttpClientCall = if (config.minWindow < 1) {
+        proceed(request).save()
+    } else {
+        val deferred = async { proceed(request).save() }
+        delay(config.minWindow)
+        deferred.await()
     }
 
     on(Send) { request ->
@@ -198,23 +192,24 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         }
 
         if (isFirst) {
-            entry.job = scope.launch {
-                try {
-                    proceed(this@on, request).also(entry.deferred::complete)
-                } catch (e: Throwable) {
-                    throw e.also(entry.deferred::completeExceptionally)
-                } finally {
-                    mutex.withLock { inFlight.remove(cacheKey) }
-                }
+            try {
+                return@on execute(request).also(entry.deferred::complete)
+            } catch (e: Throwable) {
+                throw e.also(entry.deferred::completeExceptionally)
+            } finally {
+                mutex.withLock { if (inFlight[cacheKey] === entry) inFlight.remove(cacheKey) }
             }
         }
 
         try {
-            entry.deferred.await()
+            return@on entry.deferred.await()
+        } catch (e: CancellationException) {
+            if (coroutineContext.isActive) return@on execute(request)
+            throw e
         } finally {
             mutex.withLock {
-                entry.waiters -= 1
-                if (entry.waiters == 0 && !entry.deferred.isCompleted) entry.job?.cancel()
+                if (entry.waiters == 1 && inFlight[cacheKey] === entry) inFlight.remove(cacheKey)
+                else entry.waiters -= 1
             }
         }
     }
@@ -231,8 +226,7 @@ private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig)
     return "${method.value}:${url.buildString()}|h=$headerHash"
 }
 
-private data class InFlightEntry(
+private class InFlightEntry(
     val deferred: CompletableDeferred<HttpClientCall> = CompletableDeferred(),
     var waiters: Int = 1,
-    var job: Job? = null,
 )
