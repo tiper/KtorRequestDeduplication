@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
@@ -884,5 +885,47 @@ class RequestDeduplicationTest {
 
         batch1.forEach { assertEquals("response-1", it.bodyAsText()) }
         batch2.forEach { assertEquals("response-2", it.bodyAsText()) }
+    }
+
+    @Test
+    fun leader_cancelled_waiters_retry_as_deduplicated_group() = runTest {
+        val requestCount = atomic(0)
+        // gate controls when each handler invocation is allowed to respond
+        val gate = CompletableDeferred<Unit>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    gate.await() // block until the test opens the gate
+                    requestCount.incrementAndGet()
+                    respond(
+                        content = "response-${requestCount.value}",
+                        headers = headersOf(ContentType, "text/plain"),
+                    )
+                }
+            }
+            install(RequestDeduplication)
+        }
+
+        // Start 5 concurrent requests; job0 will become the leader.
+        val jobs = List(5) { async { client.get("https://api.example.com/users") } }
+
+        // Let all coroutines run until they are all suspended on gate.await().
+        testScheduler.advanceUntilIdle()
+
+        // Cancel the leader while it (and all waiters) are still blocked on the gate.
+        jobs[0].cancel()
+
+        // Open the gate. The cancelled leader's coroutine ignores the resume and throws
+        // CancellationException. The 4 survivors loop back and re-enter deduplication:
+        // one becomes the new leader, the other 3 re-join as waiters.
+        gate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        val responses = jobs.drop(1).awaitAll()
+
+        // The cancelled leader never reached requestCount.incrementAndGet(), so the
+        // deduplicated retry is the only real HTTP call: requestCount == 1, not 4.
+        assertEquals(1, requestCount.value, "Surviving waiters must retry as one deduplicated group, not individually")
+        responses.forEach { assertEquals("response-1", it.bodyAsText()) }
     }
 }
