@@ -886,38 +886,25 @@ class RequestDeduplicationTest {
     @Test
     fun leader_cancelled_waiters_retry_as_deduplicated_group() = runTest {
         val requestCount = atomic(0)
-        // gate controls when each handler invocation is allowed to respond
-        val gate = CompletableDeferred<Unit>()
-        val client = HttpClient(MockEngine) {
-            engine {
-                addHandler {
-                    gate.await() // block until the test opens the gate
-                    respond(
-                        content = "response-${ requestCount.incrementAndGet()}",
-                        headers = headersOf(ContentType, "text/plain"),
-                    )
-                }
-            }
-            install(RequestDeduplication)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
         }
 
         val jobs = List(5) { async { client.get("https://api.example.com/users") } }
 
-        // Let all coroutines run until they are all suspended
-        testScheduler.advanceUntilIdle()
+        // Advance to just before the response is ready, then cancel job0.
+        testScheduler.advanceTimeBy(50)
 
         // Cancel the leader while all waiters are still blocked
         jobs[0].cancel()
 
-        // The cancelled leader's coroutine ignores the resume and throws CancellationException.
-        // The 4 waiters loop back and re-enter deduplication: one becomes the new leader, the other 3 re-join as waiters.
-        gate.complete(Unit)
+        // Let everything complete. The 4 survivors must deduplicate into a single retry.
         testScheduler.advanceUntilIdle()
 
         val responses = jobs.drop(1).awaitAll()
 
-        // The cancelled leader never reached requestCount.incrementAndGet(), so the
-        // deduplicated retry is the only real HTTP call.
+        // The cancelled leader never reached requestCount.incrementAndGet().
+        // The deduplicated retry should only be the real HTTP call.
         assertEquals(1, requestCount.value, "Surviving waiters must retry as one deduplicated group, not individually")
         responses.forEach { assertEquals("response-1", it.bodyAsText()) }
     }
