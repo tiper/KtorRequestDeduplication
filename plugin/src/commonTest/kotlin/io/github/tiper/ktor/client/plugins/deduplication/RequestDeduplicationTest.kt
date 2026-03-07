@@ -922,7 +922,7 @@ class RequestDeduplicationTest {
         val responses = jobs.drop(1).awaitAll()
 
         // The cancelled leader never reached requestCount.incrementAndGet(), so the
-        // deduplicated retry is the only real HTTP call-.
+        // deduplicated retry is the only real HTTP call.
         assertEquals(1, requestCount.value, "Surviving waiters must retry as one deduplicated group, not individually")
         responses.forEach { assertEquals("response-1", it.bodyAsText()) }
     }
