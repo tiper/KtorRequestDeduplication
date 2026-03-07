@@ -93,8 +93,8 @@ class RequestDeduplicationConfig {
  *
  * **Cancellation Behavior:**
  * - If one caller cancels, other concurrent callers still receive the response
- * - If all callers cancel, the in-flight request is cancelled to save resources
- * - The first caller runs in a supervisor scope to prevent cascading cancellations
+ * - If the leader is cancelled, surviving waiters automatically retry as a new deduplicated group
+ * - If all callers cancel, the in-flight entry is removed and resources are freed
  *
  * **⚠️ CRITICAL: Plugin Installation Order**
  *
