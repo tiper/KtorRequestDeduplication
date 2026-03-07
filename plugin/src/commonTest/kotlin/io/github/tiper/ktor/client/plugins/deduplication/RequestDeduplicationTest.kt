@@ -819,8 +819,7 @@ class RequestDeduplicationTest {
         val client = HttpClient(MockEngine) {
             engine {
                 addHandler {
-                    requestCount.incrementAndGet()
-                    respond("response-${requestCount.value}")
+                    respond("response-${requestCount.incrementAndGet()}")
                 }
             }
             install(RequestDeduplication) // Default config only deduplicates GET
@@ -844,8 +843,7 @@ class RequestDeduplicationTest {
         val client = HttpClient(MockEngine) {
             engine {
                 addHandler {
-                    requestCount.incrementAndGet()
-                    respond("response-${requestCount.value}")
+                    respond("response-${requestCount.incrementAndGet()}")
                 }
             }
             install(RequestDeduplication) {
@@ -894,9 +892,8 @@ class RequestDeduplicationTest {
             engine {
                 addHandler {
                     gate.await() // block until the test opens the gate
-                    requestCount.incrementAndGet()
                     respond(
-                        content = "response-${requestCount.value}",
+                        content = "response-${ requestCount.incrementAndGet()}",
                         headers = headersOf(ContentType, "text/plain"),
                     )
                 }
