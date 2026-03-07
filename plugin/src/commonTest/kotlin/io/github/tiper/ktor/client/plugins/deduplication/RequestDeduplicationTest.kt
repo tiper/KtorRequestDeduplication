@@ -835,9 +835,7 @@ class RequestDeduplicationTest {
         }.awaitAll()
 
         assertEquals(3, requestCount.value, "Expected 3 separate POST requests (POST not deduplicated by default)")
-        responses.forEachIndexed { index, response ->
-            assertEquals("response-${index + 1}", response.bodyAsText())
-        }
+        assertEquals(setOf("response-1", "response-2", "response-3"), responses.map { it.bodyAsText() }.toSet())
     }
 
     @Test
