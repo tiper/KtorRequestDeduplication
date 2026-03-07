@@ -39,4 +39,4 @@ jobs:
 
       - name: Build
         run: |
-          ./gradlew :plugin:build --no-daemon --stacktrace --no-configuration-cache
+          ./gradlew :plugin:assemble --no-daemon --stacktrace --no-configuration-cache

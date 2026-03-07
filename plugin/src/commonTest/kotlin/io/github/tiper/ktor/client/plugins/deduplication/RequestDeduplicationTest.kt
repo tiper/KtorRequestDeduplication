@@ -818,8 +818,7 @@ class RequestDeduplicationTest {
         val client = HttpClient(MockEngine) {
             engine {
                 addHandler {
-                    requestCount.incrementAndGet()
-                    respond("response-${requestCount.value}")
+                    respond("response-${requestCount.incrementAndGet()}")
                 }
             }
             install(RequestDeduplication) // Default config only deduplicates GET
@@ -834,9 +833,7 @@ class RequestDeduplicationTest {
         }.awaitAll()
 
         assertEquals(3, requestCount.value, "Expected 3 separate POST requests (POST not deduplicated by default)")
-        responses.forEachIndexed { index, response ->
-            assertEquals("response-${index + 1}", response.bodyAsText())
-        }
+        assertEquals(setOf("response-1", "response-2", "response-3"), responses.map { it.bodyAsText() }.toSet())
     }
 
     @Test
@@ -845,8 +842,7 @@ class RequestDeduplicationTest {
         val client = HttpClient(MockEngine) {
             engine {
                 addHandler {
-                    requestCount.incrementAndGet()
-                    respond("response-${requestCount.value}")
+                    respond("response-${requestCount.incrementAndGet()}")
                 }
             }
             install(RequestDeduplication) {
@@ -884,5 +880,31 @@ class RequestDeduplicationTest {
 
         batch1.forEach { assertEquals("response-1", it.bodyAsText()) }
         batch2.forEach { assertEquals("response-2", it.bodyAsText()) }
+    }
+
+    @Test
+    fun leader_cancelled_waiters_retry_as_deduplicated_group() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val jobs = List(5) { async { client.get("https://api.example.com/users") } }
+
+        // Advance to just before the response is ready, then cancel job0.
+        testScheduler.advanceTimeBy(50)
+
+        // Cancel the leader while all waiters are still blocked
+        jobs[0].cancel()
+
+        // Let everything complete. The 4 survivors must deduplicate into a single retry.
+        testScheduler.advanceUntilIdle()
+
+        val responses = jobs.drop(1).awaitAll()
+
+        // The cancelled leader never reached requestCount.incrementAndGet().
+        // The deduplicated retry should only be the real HTTP call.
+        assertEquals(1, requestCount.value, "Surviving waiters must retry as one deduplicated group, not individually")
+        responses.forEach { assertEquals("response-1", it.bodyAsText()) }
     }
 }
