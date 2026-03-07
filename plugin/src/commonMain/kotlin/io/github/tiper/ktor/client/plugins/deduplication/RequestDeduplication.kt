@@ -10,11 +10,13 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpMethod.Companion.Get
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Configuration for the request deduplication plugin.
@@ -193,19 +195,23 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
             } catch (e: Throwable) {
                 throw e.also(entry.deferred::completeExceptionally)
             } finally {
-                mutex.withLock { if (inFlight[cacheKey] === entry) inFlight.remove(cacheKey) }
+                withContext(NonCancellable) {
+                    mutex.withLock { if (inFlight[cacheKey] === entry) inFlight.remove(cacheKey) }
+                }
             }
         }
 
         try {
             return entry.deferred.await()
         } catch (e: CancellationException) {
-            if (!coroutineContext.isActive) throw e
+            if (!isActive) throw e
             return deduplicate(request, cacheKey)
         } finally {
-            mutex.withLock {
-                if (entry.waiters == 1 && inFlight[cacheKey] === entry) inFlight.remove(cacheKey)
-                else entry.waiters -= 1
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    if (entry.waiters == 1 && inFlight[cacheKey] === entry) inFlight.remove(cacheKey)
+                    else entry.waiters -= 1
+                }
             }
         }
     }
