@@ -11,12 +11,17 @@ plugins {
 }
 
 group = "io.github.tiper"
-version = "3.1.0"
+version = "3.1.1"
 
 kotlin {
 
     // JVM & Android
-    jvm()
+    jvm {
+        @Suppress("OPT_IN_USAGE")
+        compilerOptions {
+            jvmTarget.set(JVM_1_8)
+        }
+    }
     androidTarget {
         publishLibraryVariants("release")
         @Suppress("OPT_IN_USAGE")
