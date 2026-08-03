@@ -12,8 +12,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -84,8 +86,8 @@ class RequestDeduplicationConfig {
  * Ktor client plugin that deduplicates concurrent HTTP requests.
  *
  * When multiple requests are made to the same URL concurrently, only one actual
- * request is executed, and all callers receive the same response. After the last
- * concurrent caller completes, the shared response is released and new requests
+ * request is executed, and all callers receive the same response. Once that request
+ * completes, the shared response is released and new requests
  * will trigger fresh HTTP calls.
  *
  * **Memory Optimization:** The response body is read once into a ByteArray and
@@ -172,46 +174,46 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 ) {
     val config = pluginConfig
     val mutex = Mutex()
-    val inFlight = mutableMapOf<String, InFlightEntry>()
+    val inFlight = mutableMapOf<String, CompletableDeferred<HttpClientCall>>()
 
     suspend fun Send.Sender.execute(request: HttpRequestBuilder): HttpClientCall = if (config.minWindow < 1) {
         proceed(request).save()
     } else {
-        val deferred = async { proceed(request).save() }
-        delay(config.minWindow)
-        deferred.await()
+        supervisorScope {
+            val deferred = async { proceed(request).save() }
+            delay(config.minWindow)
+            deferred.await()
+        }
     }
 
     suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: String): HttpClientCall {
-        val (isFirst, entry) = mutex.withLock {
-            val existing = inFlight[cacheKey]
-            if (existing != null) false to existing.also { it.waiters += 1 }
-            else true to InFlightEntry().also { inFlight[cacheKey] = it }
-        }
-
-        if (isFirst) {
-            try {
-                return execute(request).also(entry.deferred::complete)
-            } catch (e: Throwable) {
-                throw e.also(entry.deferred::completeExceptionally)
-            } finally {
-                withContext(NonCancellable) {
-                    mutex.withLock { if (inFlight[cacheKey] === entry) inFlight.remove(cacheKey) }
-                }
+        while (true) {
+            val (isFirst, deferred) = mutex.withLock {
+                val existing = inFlight[cacheKey]
+                if (existing != null) false to existing
+                else true to CompletableDeferred<HttpClientCall>().also { inFlight[cacheKey] = it }
             }
-        }
 
-        try {
-            return entry.deferred.await()
-        } catch (e: CancellationException) {
-            if (!isActive) throw e
-            return deduplicate(request, cacheKey)
-        } finally {
-            withContext(NonCancellable) {
-                mutex.withLock {
-                    if (entry.waiters == 1 && inFlight[cacheKey] === entry) inFlight.remove(cacheKey)
-                    else entry.waiters -= 1
+            if (isFirst) {
+                val result = runCatching { execute(request) }
+                // Publishing the result and dropping the entry happen under the same lock, so a
+                // waiter can never observe an already-completed deferred and spin on it.
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        inFlight.remove(cacheKey)
+                        result.fold(deferred::complete, deferred::completeExceptionally)
+                    }
                 }
+                return result.getOrThrow()
+            }
+
+            try {
+                return deferred.await()
+            } catch (_: CancellationException) {
+                // Send.Sender is a CoroutineScope over the client's context, so a bare `isActive`
+                // would check the client's job. currentCoroutineContext() checks this caller.
+                currentCoroutineContext().ensureActive()
+                // Leader was cancelled: retry as a new deduplicated group.
             }
         }
     }
@@ -232,8 +234,3 @@ private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig)
         }
     return "${method.value}:${url.buildString()}|h=$headerHash"
 }
-
-private class InFlightEntry(
-    val deferred: CompletableDeferred<HttpClientCall> = CompletableDeferred(),
-    var waiters: Int = 1,
-)

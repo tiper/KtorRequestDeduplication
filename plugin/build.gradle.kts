@@ -1,5 +1,6 @@
 import com.vanniktech.maven.publish.SonatypeHost.Companion.CENTRAL_PORTAL
 import org.gradle.api.JavaVersion.VERSION_1_8
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
 
@@ -11,7 +12,7 @@ plugins {
 }
 
 group = "io.github.tiper"
-version = "3.1.1"
+version = "3.1.2"
 
 kotlin {
 
@@ -70,6 +71,18 @@ kotlin {
     androidNativeX64()
     mingwX64()
     watchosDeviceArm64()
+
+    // Groups JVM and native so tests needing real threads can be shared. JS and wasm are excluded
+    // because they are single-threaded and have no runBlocking.
+    @OptIn(ExperimentalKotlinGradlePluginApi::class)
+    applyDefaultHierarchyTemplate {
+        common {
+            group("concurrent") {
+                withJvm()
+                withNative()
+            }
+        }
+    }
 
     sourceSets {
         val commonMain by getting {
