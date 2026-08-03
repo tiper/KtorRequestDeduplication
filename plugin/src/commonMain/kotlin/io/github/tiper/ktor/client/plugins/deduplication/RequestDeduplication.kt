@@ -86,8 +86,8 @@ class RequestDeduplicationConfig {
  * Ktor client plugin that deduplicates concurrent HTTP requests.
  *
  * When multiple requests are made to the same URL concurrently, only one actual
- * request is executed, and all callers receive the same response. After the last
- * concurrent caller completes, the shared response is released and new requests
+ * request is executed, and all callers receive the same response. Once that request
+ * completes, the shared response is released and new requests
  * will trigger fresh HTTP calls.
  *
  * **Memory Optimization:** The response body is read once into a ByteArray and

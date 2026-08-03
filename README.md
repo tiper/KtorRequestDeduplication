@@ -291,7 +291,7 @@ The plugin handles cancellation gracefully to ensure robustness:
 **All callers cancel:**
 - If **all** concurrent callers cancel before the response arrives, the in-flight HTTP request is **cancelled automatically**
 - This saves network bandwidth and server resources
-- The plugin tracks active waiters and cancels the request when the count reaches zero
+- The plugin's HTTP request is owned by the first caller, so cancelling it cancels the request; any callers still waiting retry as a new deduplicated group
 
 **Example:**
 ```kotlin
