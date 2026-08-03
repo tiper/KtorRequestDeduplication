@@ -189,21 +189,22 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: String): HttpClientCall {
         while (true) {
             val (isFirst, deferred) = mutex.withLock {
-                val existing = inFlight[cacheKey]?.takeUnless { it.isCompleted }
+                val existing = inFlight[cacheKey]
                 if (existing != null) false to existing
                 else true to CompletableDeferred<HttpClientCall>().also { inFlight[cacheKey] = it }
             }
 
             if (isFirst) {
-                try {
-                    return execute(request).also(deferred::complete)
-                } catch (e: Throwable) {
-                    throw e.also(deferred::completeExceptionally)
-                } finally {
-                    withContext(NonCancellable) {
-                        mutex.withLock { if (inFlight[cacheKey] === deferred) inFlight.remove(cacheKey) }
+                val result = runCatching { execute(request) }
+                // Publishing the result and dropping the entry happen under the same lock, so a
+                // waiter can never observe an already-completed deferred and spin on it.
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        inFlight.remove(cacheKey)
+                        result.fold(deferred::complete, deferred::completeExceptionally)
                     }
                 }
+                return result.getOrThrow()
             }
 
             try {
