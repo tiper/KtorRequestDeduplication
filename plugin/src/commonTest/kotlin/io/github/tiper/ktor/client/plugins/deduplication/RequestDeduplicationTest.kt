@@ -19,11 +19,14 @@ import io.ktor.http.HttpStatusCode.Companion.NotFound
 import io.ktor.http.headersOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.atomicfu.atomic
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.runTest
 
 @Suppress("OPT_IN_USAGE")
@@ -906,5 +909,76 @@ class RequestDeduplicationTest {
         // The deduplicated retry should only be the real HTTP call.
         assertEquals(1, requestCount.value, "Surviving waiters must retry as one deduplicated group, not individually")
         responses.forEach { assertEquals("response-1", it.bodyAsText()) }
+    }
+
+    @Test
+    fun leader_cancelled_repeatedly_waiters_still_complete() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val jobs = List(20) { async { client.get("https://api.example.com/users") } }
+
+        // Cancel the leader three times in a row, each time before the response is ready.
+        // Every cancellation forces the remaining waiters through the retry loop.
+        repeat(3) { round ->
+            testScheduler.advanceTimeBy(50)
+            jobs[round].cancel()
+            testScheduler.advanceTimeBy(1)
+        }
+
+        testScheduler.advanceUntilIdle()
+
+        val responses = jobs.drop(3).awaitAll()
+
+        assertEquals(1, requestCount.value, "Surviving waiters must retry as one deduplicated group after each cancellation")
+        responses.forEach { assertEquals("response-1", it.bodyAsText()) }
+    }
+
+    @Test
+    fun cancelled_waiter_propagates_cancellation_without_retrying() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val leader = async { client.get("https://api.example.com/users") }
+        val waiter = async { client.get("https://api.example.com/users") }
+
+        testScheduler.advanceTimeBy(50)
+
+        // Cancel only the waiter - it must give up, not retry as a new leader.
+        waiter.cancel()
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(waiter.isCancelled, "Cancelled waiter must propagate its own cancellation")
+        assertEquals("response-1", leader.await().bodyAsText())
+        assertEquals(1, requestCount.value, "Cancelled waiter must not trigger an extra request")
+    }
+
+    @Test
+    fun minWindow_failure_does_not_cancel_the_client() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    if (requestCount.incrementAndGet() == 1) throw RuntimeException("boom")
+                    respond("response-${requestCount.value}")
+                }
+            }
+            install(RequestDeduplication) {
+                minWindow = 100
+            }
+        }
+
+        assertFailsWith<RuntimeException> { client.get("https://api.example.com/users") }
+
+        assertTrue(client.coroutineContext[Job]?.isActive == true, "Client must stay active after a failed request")
+
+        val response = client.get("https://api.example.com/users")
+
+        assertEquals(2, requestCount.value, "Expected a second request on the same client")
+        assertEquals("response-2", response.bodyAsText())
     }
 }

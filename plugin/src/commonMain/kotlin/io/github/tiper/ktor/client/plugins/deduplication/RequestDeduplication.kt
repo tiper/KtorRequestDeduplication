@@ -12,8 +12,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -172,46 +174,45 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 ) {
     val config = pluginConfig
     val mutex = Mutex()
-    val inFlight = mutableMapOf<String, InFlightEntry>()
+    val inFlight = mutableMapOf<String, CompletableDeferred<HttpClientCall>>()
 
     suspend fun Send.Sender.execute(request: HttpRequestBuilder): HttpClientCall = if (config.minWindow < 1) {
         proceed(request).save()
     } else {
-        val deferred = async { proceed(request).save() }
-        delay(config.minWindow)
-        deferred.await()
+        supervisorScope {
+            val deferred = async { proceed(request).save() }
+            delay(config.minWindow)
+            deferred.await()
+        }
     }
 
     suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: String): HttpClientCall {
-        val (isFirst, entry) = mutex.withLock {
-            val existing = inFlight[cacheKey]
-            if (existing != null) false to existing.also { it.waiters += 1 }
-            else true to InFlightEntry().also { inFlight[cacheKey] = it }
-        }
+        while (true) {
+            val (isFirst, deferred) = mutex.withLock {
+                val existing = inFlight[cacheKey]?.takeUnless { it.isCompleted }
+                if (existing != null) false to existing
+                else true to CompletableDeferred<HttpClientCall>().also { inFlight[cacheKey] = it }
+            }
 
-        if (isFirst) {
-            try {
-                return execute(request).also(entry.deferred::complete)
-            } catch (e: Throwable) {
-                throw e.also(entry.deferred::completeExceptionally)
-            } finally {
-                withContext(NonCancellable) {
-                    mutex.withLock { if (inFlight[cacheKey] === entry) inFlight.remove(cacheKey) }
+            if (isFirst) {
+                try {
+                    return execute(request).also(deferred::complete)
+                } catch (e: Throwable) {
+                    throw e.also(deferred::completeExceptionally)
+                } finally {
+                    withContext(NonCancellable) {
+                        mutex.withLock { if (inFlight[cacheKey] === deferred) inFlight.remove(cacheKey) }
+                    }
                 }
             }
-        }
 
-        try {
-            return entry.deferred.await()
-        } catch (e: CancellationException) {
-            if (!isActive) throw e
-            return deduplicate(request, cacheKey)
-        } finally {
-            withContext(NonCancellable) {
-                mutex.withLock {
-                    if (entry.waiters == 1 && inFlight[cacheKey] === entry) inFlight.remove(cacheKey)
-                    else entry.waiters -= 1
-                }
+            try {
+                return deferred.await()
+            } catch (_: CancellationException) {
+                // Send.Sender is a CoroutineScope over the client's context, so a bare `isActive`
+                // would check the client's job. currentCoroutineContext() checks this caller.
+                currentCoroutineContext().ensureActive()
+                // Leader was cancelled: retry as a new deduplicated group.
             }
         }
     }
@@ -232,8 +233,3 @@ private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig)
         }
     return "${method.value}:${url.buildString()}|h=$headerHash"
 }
-
-private class InFlightEntry(
-    val deferred: CompletableDeferred<HttpClientCall> = CompletableDeferred(),
-    var waiters: Int = 1,
-)
