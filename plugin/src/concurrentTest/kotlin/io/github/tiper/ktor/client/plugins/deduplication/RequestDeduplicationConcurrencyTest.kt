@@ -18,8 +18,8 @@ private const val URL = "https://api.example.com/users"
 
 /**
  * `runTest` queues every resumption on a single thread, so a waiter can never resume *inside* the
- * leader's completion call. Reproducing that requires real threads, hence this test lives here
- * rather than in commonTest.
+ * leader's completion call. Reproducing that requires real threads, hence this test lives in
+ * concurrentTest (JVM and native) rather than in commonTest.
  */
 class RequestDeduplicationConcurrencyTest {
 
