@@ -8,6 +8,8 @@ When multiple components request the same resource simultaneously, only one actu
 [![Kotlin](https://img.shields.io/badge/kotlin-2.0.20-blue.svg?logo=kotlin)](http://kotlinlang.org)
 [![Ktor](https://img.shields.io/badge/ktor-3.0.0+-orange.svg)](https://ktor.io)
 
+📖 **[Guide and API reference](https://tiper.github.io/KtorRequestDeduplication/)**
+
 ## Supported Platforms
 
 ### Version 2.x.x (Ktor 2.3.0+)

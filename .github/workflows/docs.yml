@@ -1,0 +1,59 @@
+name: Docs
+
+on:
+  push:
+    tags: [ "*" ]
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: macos-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4.6.0
+        with:
+          distribution: "jetbrains"
+          java-version: 21
+          cache: "gradle"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache
+        uses: actions/cache@v4.2.0
+        with:
+          path: |
+            ~/.konan
+            /usr/local/lib/android/sdk/ndk
+          key: ${{ runner.os }}-kotlin-native-ndk-${{ hashFiles(
+            'gradle/libs.versions.toml',
+            'gradle.properties'
+            ) }}
+          restore-keys: |
+            ${{ runner.os }}-kotlin-native-ndk-
+
+      - name: Generate docs
+        run: ./gradlew :plugin:dokkaGenerate --no-configuration-cache
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: plugin/build/dokka/html
+
+      - name: Deploy site
+        id: deployment
+        uses: actions/deploy-pages@v4

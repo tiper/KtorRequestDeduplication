@@ -4,6 +4,7 @@ android-compileSdk = "34"
 android-minSdk = "21"
 atomicfu = "0.25.0"
 coroutines = "1.9.0"
+dokka = "2.0.0" # https://github.com/Kotlin/dokka/releases
 kotlin = "2.0.20" # https://github.com/JetBrains/kotlin/releases
 ktor = "3.0.0" #https://github.com/ktorio/ktor-build-plugins/releases
 ktlint-gradle = "14.0.1" # https://github.com/JLLeitschuh/ktlint-gradle/releases
@@ -19,6 +20,7 @@ slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint-gradle" }
 vanniktech-maven-publish = { id = "com.vanniktech.maven.publish", version = "0.29.0" }
