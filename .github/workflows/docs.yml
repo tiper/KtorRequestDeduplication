@@ -53,6 +53,8 @@ jobs:
             ${{ runner.os }}-kotlin-native-ndk-
 
       - name: Generate docs
+        env:
+          DOCS_SOURCE_REF: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: ./gradlew :plugin:dokkaGenerate --no-configuration-cache
 
       - name: Upload site

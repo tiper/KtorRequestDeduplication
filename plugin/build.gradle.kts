@@ -141,8 +141,9 @@ val dokkaModuleDoc by tasks.registering {
     inputs.file(readme)
     outputs.file(moduleDoc)
     doLast {
-        // Dokka can't render the badges.
+        // Dokka can't render the badges, and its headings have no anchors for in-page links to land on.
         val guide = readme.readLines().drop(1).filterNot { it.startsWith("[![") }.joinToString("\n").trimStart()
+            .replace(Regex("""\[([^]]+)]\(#[^)]+\)"""), "$1")
         moduleDoc.get().asFile.writeText("# Module ktor-client-deduplication\n\n$guide")
     }
 }
@@ -153,7 +154,8 @@ dokka {
         includes.from(dokkaModuleDoc)
         sourceLink {
             localDirectory = file("src")
-            remoteUrl("https://github.com/tiper/KtorRequestDeduplication/tree/main/plugin/src")
+            val ref = providers.environmentVariable("DOCS_SOURCE_REF").getOrElse("main")
+            remoteUrl("https://github.com/tiper/KtorRequestDeduplication/tree/$ref/plugin/src")
         }
     }
 }
