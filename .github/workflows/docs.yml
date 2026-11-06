@@ -1,8 +1,11 @@
 name: Docs
 
+# Runs after Publish rather than on the tag because the github-pages environment only accepts deploys
+# from main, which is where workflow_run runs. It still builds the commit that was released.
 on:
-  push:
-    tags: [ "*" ]
+  workflow_run:
+    workflows: [ "Publish" ]
+    types: [ completed ]
 
   workflow_dispatch:
 
@@ -17,12 +20,15 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: macos-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup Java
         uses: actions/setup-java@v4.6.0
