@@ -215,6 +215,18 @@ excludeHeaders = setOf(
 
 **⚠️ Important:** Header matching is case-sensitive. Make sure the casing matches exactly how your SDK sends the headers.
 
+### Skipping deduplication for one request
+
+Shared responses are read fully into memory before any caller sees them. Use `skipDeduplication()` for a response that must be streamed, such as a large download:
+
+```kotlin
+client.prepareGet("https://example.com/large-file.zip") {
+    skipDeduplication()
+}.execute { response ->
+    response.bodyAsChannel().copyTo(file)
+}
+```
+
 ## Debugging
 
 If deduplication isn't working as expected, check the actual header names sent by your SDK:
@@ -243,8 +255,7 @@ val client = HttpClient {
 
 ### ❌ Not Recommended For
 
-- Large file downloads (entire response loaded into memory)
-- Streaming responses
+- Large file downloads and streaming responses, unless the request calls `skipDeduplication()` (see [Skipping deduplication for one request](#skipping-deduplication-for-one-request))
 - POST/PUT/PATCH requests (non-idempotent operations) unless explicitly enabled
 - Requests where each call should be independent
 
@@ -263,9 +274,9 @@ The plugin reads the response body once into memory and **shares it** (not copie
 **Implications:**
 - Small JSON/XML responses: ✅ No problem (e.g., 10KB × 1 = 10KB)
 - Large responses with many callers: ✅ Efficient (e.g., 1MB × 1 = 1MB, not 1MB × 10)
-- Very large files (>10MB): ⚠️ Still loads entire response into memory
+- Very large files (>10MB): ⚠️ Still loads entire response into memory unless the request calls `skipDeduplication()`
 - Mobile devices: ✅ Memory-efficient due to sharing
-- Streaming responses: ❌ Not supported (entire body must be loaded)
+- Streaming responses: ❌ Not supported unless the request calls `skipDeduplication()` (entire body must be loaded)
 
 ### Thread Safety
 

@@ -12,6 +12,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpMethod.Companion.Get
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.content.OutgoingContent.ByteArrayContent
+import io.ktor.util.AttributeKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -223,10 +224,29 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     }
 
     on(Send) { request ->
-        if (request.method !in config.deduplicateMethods) return@on proceed(request)
+        if (request.method !in config.deduplicateMethods || SkipDeduplication in request.attributes) {
+            return@on proceed(request)
+        }
         val cacheKey = request.buildCacheKey(config) ?: return@on proceed(request)
         deduplicate(request, cacheKey)
     }
+}
+
+private val SkipDeduplication = AttributeKey<Unit>("SkipDeduplication")
+
+/**
+ * Sends this request on its own, without sharing it with concurrent identical requests.
+ *
+ * The plugin reads a shared response fully into memory before any caller sees it, so use this for
+ * responses that must be streamed, such as large downloads:
+ * ```kotlin
+ * client.prepareGet(url) { skipDeduplication() }.execute { response ->
+ *     response.bodyAsChannel().copyTo(file)
+ * }
+ * ```
+ */
+fun HttpRequestBuilder.skipDeduplication() {
+    attributes.put(SkipDeduplication, Unit)
 }
 
 /**

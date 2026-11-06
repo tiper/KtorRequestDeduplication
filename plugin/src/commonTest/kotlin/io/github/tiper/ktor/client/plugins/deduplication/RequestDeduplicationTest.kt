@@ -637,6 +637,41 @@ class RequestDeduplicationTest {
     }
 
     @Test
+    fun skipDeduplication_sends_every_request() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val responses = List(3) {
+            async {
+                client.get("https://api.example.com/users") {
+                    skipDeduplication()
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(3, requestCount.value, "Expected every skipped request to reach the network")
+        assertEquals(3, responses.map { it.bodyAsText() }.toSet().size, "Expected one response per request")
+    }
+
+    @Test
+    fun skipDeduplication_does_not_affect_other_requests() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(
+            async { client.get("https://api.example.com/users") },
+            async { client.get("https://api.example.com/users") },
+            async { client.get("https://api.example.com/users") { skipDeduplication() } },
+        ).awaitAll()
+
+        assertEquals(2, requestCount.value, "Expected 1 shared request plus the skipped one")
+    }
+
+    @Test
     fun large_number_of_concurrent_requests_are_deduplicated() = runTest {
         val requestCount = atomic(0)
         val client = mockClient(200) {

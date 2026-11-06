@@ -1,7 +1,16 @@
 package io.github.tiper.ktor.client.plugins.deduplication
 
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpStatusCode.Companion.OK
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.readAvailable
+import io.ktor.utils.io.writeStringUtf8
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlinx.atomicfu.atomic
@@ -13,6 +22,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
@@ -63,5 +73,37 @@ class RequestDeduplicationConcurrencyTest {
 
         client.close()
         scope.cancel()
+    }
+
+    @Test
+    fun skipDeduplication_keeps_the_response_streaming() = runBlocking {
+        val firstChunkRead = CompletableDeferred<Unit>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    val channel = ByteChannel(autoFlush = true)
+                    // The stream only ends once the caller has read from it, so a plugin that
+                    // buffers the whole body first never gets past this point.
+                    launch {
+                        channel.writeStringUtf8("chunk")
+                        firstChunkRead.await()
+                        channel.close()
+                    }
+                    respond(channel, OK)
+                }
+            }
+            install(RequestDeduplication)
+        }
+
+        withTimeout(5_000) {
+            client.prepareGet(URL) { skipDeduplication() }.execute { response ->
+                val chunk = ByteArray(5)
+                response.bodyAsChannel().readAvailable(chunk)
+                firstChunkRead.complete(Unit)
+                assertEquals("chunk", chunk.decodeToString())
+            }
+        }
+
+        client.close()
     }
 }
