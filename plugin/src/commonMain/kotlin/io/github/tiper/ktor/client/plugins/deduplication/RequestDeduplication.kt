@@ -84,7 +84,7 @@ class RequestDeduplicationConfig {
 /**
  * Ktor client plugin that deduplicates concurrent HTTP requests.
  *
- * When multiple requests are made to the same URL concurrently, only one actual
+ * When multiple identical requests are made concurrently, only one actual
  * request is executed, and all callers receive the same response. Once that request
  * completes, the shared response is released and new requests
  * will trigger fresh HTTP calls.
@@ -96,36 +96,21 @@ class RequestDeduplicationConfig {
  *
  * **Cancellation Behavior:**
  * - If one caller cancels, other concurrent callers still receive the response
- * - If the leader is cancelled, surviving waiters automatically retry as a new deduplicated group
+ * - If the leader is cancelled, its HTTP call is aborted and surviving waiters retry as a new
+ *   deduplicated group, which sends a second HTTP request
  * - If all callers cancel, the in-flight entry is removed and resources are freed
  *
- * **⚠️ CRITICAL: Plugin Installation Order**
+ * **Plugin Installation Order**
  *
- * Plugin order matters! The order affects what gets included in the deduplication cache key.
+ * Most plugins change the request before it reaches the Send step, where deduplication happens.
+ * Their changes are always part of the cache key, wherever they are installed. This covers
+ * `DefaultRequest`, `Auth`, and any plugin using `onRequest`. To stop such a header from affecting
+ * deduplication, add it to [RequestDeduplicationConfig.excludeHeaders].
  *
- * **Plugins BEFORE RequestDeduplication:** Their modifications (headers, auth tokens, etc.)
- * are included in the cache key. Use this for plugins you want to affect deduplication behavior.
- *
- * **Plugins AFTER RequestDeduplication:** Their modifications happen after deduplication,
- * so they don't affect the cache key. Use this for plugins that shouldn't interfere.
- *
- * **Example:**
- * ```kotlin
- * val client = HttpClient {
- *     // Before: modifications included in cache key
- *     install(DefaultRequest) { ... }    // Headers affect cache key
- *     install(Auth) { ... }              // Token affects cache key
- *
- *     install(RequestDeduplication)      // Deduplication based on above
- *
- *     // After: don't affect cache key
- *     install(OtherAuth) { ... }         // Token that doesn't affect cache key
- *     install(Logging) { ... }           // Only logs, no effect on cache
- *     install(HttpTimeout) { ... }       // Applied after dedup
- * }
- * ```
- *
- * Consider your requirements and test to ensure the order matches your expected behavior.
+ * Order only matters for plugins that change the request in `on(Send)`:
+ * - **Installed BEFORE RequestDeduplication:** their changes are part of the cache key.
+ * - **Installed AFTER RequestDeduplication:** their changes come after deduplication, so they are
+ *   not part of the cache key, and only run for the request that is actually sent.
  *
  * **Use case:** Optimize scenarios where multiple components might request the same data simultaneously
  *

@@ -79,30 +79,26 @@ launch { client.get("https://api.example.com/users") }
 // All three callers receive the same shared response
 ```
 
-### ⚠️ Important: Plugin Installation Order
+### Plugin Installation Order
 
-**Plugin order matters!** The order affects what gets included in the deduplication cache key.
+Most plugins change the request before it reaches the Send step, where deduplication happens. Their changes are **always part of the cache key, wherever they are installed**. This covers `DefaultRequest`, `Auth`, and any plugin using `onRequest`. To stop such a header from affecting deduplication, add it to `excludeHeaders`.
 
-- **Plugins BEFORE RequestDeduplication**: Their modifications (headers, auth tokens, etc.) are **included in the cache key**. Use this for plugins you want to affect deduplication behavior.
-- **Plugins AFTER RequestDeduplication**: Their modifications happen **after deduplication**, so they don't affect the cache key. Use this for plugins that shouldn't interfere with deduplication.
+Order only matters for plugins that change the request in `on(Send)`:
+
+- **Installed before RequestDeduplication**: their changes are part of the cache key.
+- **Installed after RequestDeduplication**: their changes come after deduplication, so they are not part of the cache key, and only run for the request that is actually sent.
 
 **Example:**
 ```kotlin
 val client = HttpClient {
-    // Install BEFORE if you want their effects in the cache key
-    install(DefaultRequest) { ... }    // Headers add to cache key
-    install(Auth) { ... }              // Token adds to cache key
+    install(Auth) { ... }              // In the cache key, even if installed last
+    install(DefaultRequest) { ... }    // In the cache key, even if installed last
 
-    install(RequestDeduplication)      // Deduplication based on above
-
-    // Install AFTER if you don't want them affecting deduplication
-    install(OtherAuth) { ... }         // Token that doesn't affect cache key
-    install(Logging) { ... }           // Logs response, doesn't affect cache key
-    install(HttpTimeout) { ... }       // Timeout applies after dedup
+    install(BeforeDedup)               // on(Send) plugin: in the cache key
+    install(RequestDeduplication)
+    install(AfterDedup)                // on(Send) plugin: not in the cache key
 }
 ```
-
-Consider your requirements and test to ensure the plugin order matches your expected behavior.
 
 ### Advanced Configuration
 
@@ -133,7 +129,7 @@ val client = HttpClient {
 1. **Request Interception**: When a request is made, the plugin generates a cache key from the HTTP method, URL, headers (excluding those in `excludeHeaders`), and body.
 2. **Deduplication Check**: If another request with the same cache key is in-flight, the plugin waits for it to complete. Deduplication only applies to concurrent requests; sequential requests are not deduplicated.
 3. **Response Sharing**: The first request's response body is read once into memory and shared with all waiting callers (including error responses). The response is **not cached** - it's only shared during the concurrent execution window.
-4. **Cleanup**: After all concurrent callers complete, the shared response is released and the entry is removed. Subsequent requests will trigger new HTTP calls.
+4. **Cleanup**: As soon as the response arrives, the entry is removed. Subsequent requests will trigger new HTTP calls.
 
 ### Cache Key Generation
 
@@ -281,7 +277,7 @@ The implementation is thread-safe and uses Kotlin's `Mutex` for synchronization.
 
 ### Performance
 
-- **Cache key generation:** O(n) where n = number of headers
+- **Cache key generation:** O(n) where n = number of headers, plus the body size when comparing bodies
 - **Deduplication check:** O(1) HashMap lookup
 - **Overhead:** Negligible compared to network latency (~microseconds vs milliseconds)
 
@@ -293,28 +289,28 @@ Error responses (e.g., 404, 500) are also deduplicated and shared with all waiti
 
 The plugin handles cancellation gracefully to ensure robustness:
 
-**Individual caller cancellation:**
-- If one caller cancels, other concurrent callers **continue normally** and receive the response
+**A waiting caller cancels:**
+- Other callers **continue normally** and receive the response
 - The cancelled caller gets a `CancellationException` as expected
-- This is achieved using a supervisor scope for the in-flight request
+
+**The first caller cancels:**
+- The first caller owns the HTTP request, so cancelling it **aborts that request**
+- Any callers still waiting retry as a new deduplicated group, which **sends a second HTTP request**
 
 **All callers cancel:**
-- If **all** concurrent callers cancel before the response arrives, the in-flight HTTP request is **cancelled automatically**
-- This saves network bandwidth and server resources
-- The plugin's HTTP request is owned by the first caller, so cancelling it cancels the request; any callers still waiting retry as a new deduplicated group
+- The in-flight HTTP request is **cancelled**, which saves network bandwidth and server resources
 
 **Example:**
 ```kotlin
-// Caller 1 starts request
-launch { client.get("https://api.example.com/data") }
+// Caller 1 starts the request
+val first = launch { client.get("https://api.example.com/data") }
 
-// Caller 2 joins (waits for same request)
-val job = launch { client.get("https://api.example.com/data") }
+// Caller 2 joins (waits for the same request)
+val second = launch { client.get("https://api.example.com/data") }
 
-// Caller 2 cancels
-job.cancel()  // ✅ Caller 2 is cancelled, Caller 1 still gets response
+second.cancel()  // ✅ Caller 2 is cancelled, Caller 1 still gets the response
 
-// If both cancel before response arrives, the HTTP request is cancelled
+// If Caller 1 cancels instead, its request is aborted and Caller 2 sends a new one
 ```
 
 ### Reliable Testing
@@ -334,7 +330,7 @@ val client = mockClient {
 This library uses **semantic versioning aligned with Ktor major versions**:
 
 | Plugin Version | Ktor Version | Kotlin Version |
-|---|---|----------------|---|---|
+|---|---|----------------|
 | **2.x.x** | 2.3.0+ | 1.9.20+        |
 | **3.x.x** | 3.0.0+ | 2.0.20+        |
 

@@ -1,9 +1,13 @@
 package io.github.tiper.ktor.client.plugins.deduplication
 
 import io.ktor.client.HttpClient
+import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
+import io.ktor.client.plugins.api.Send
+import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.plugins.sse.SSEClientContent
 import io.ktor.client.request.ClientUpgradeContent
 import io.ktor.client.request.get
@@ -634,6 +638,67 @@ class RequestDeduplicationTest {
         ).awaitAll()
 
         assertEquals(2, requestCount.value, "Expected 1 shared request plus the skipped one")
+    }
+
+    @Test
+    fun onRequest_changes_are_in_the_cache_key_wherever_the_plugin_is_installed() = runTest {
+        val requestCount = atomic(0)
+        val nonce = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    delay(100)
+                    respond("response")
+                }
+            }
+            install(RequestDeduplication)
+            install(
+                createClientPlugin("AddsNonce") {
+                    onRequest { request, _ -> request.headers.append("X-Nonce", "${nonce.incrementAndGet()}") }
+                },
+            )
+        }
+
+        List(3) { async { client.get("https://api.example.com/users") } }.awaitAll()
+
+        assertEquals(3, requestCount.value, "onRequest runs before the Send step, so install order doesn't matter")
+    }
+
+    @Test
+    fun send_changes_are_only_in_the_cache_key_when_installed_before() = runTest {
+        val nonce = atomic(0)
+        val addsNonce = createClientPlugin("AddsNonce") {
+            on(Send) { request ->
+                request.headers.append("X-Nonce", "${nonce.incrementAndGet()}")
+                proceed(request)
+            }
+        }
+        val requestCount = atomic(0)
+        fun HttpClientConfig<MockEngineConfig>.countRequests() = engine {
+            addHandler {
+                requestCount.incrementAndGet()
+                delay(100)
+                respond("response")
+            }
+        }
+
+        val installedBefore = HttpClient(MockEngine) {
+            countRequests()
+            install(addsNonce)
+            install(RequestDeduplication)
+        }
+        List(3) { async { installedBefore.get("https://api.example.com/users") } }.awaitAll()
+        assertEquals(3, requestCount.value, "Expected the header to split the requests")
+
+        requestCount.value = 0
+        val installedAfter = HttpClient(MockEngine) {
+            countRequests()
+            install(RequestDeduplication)
+            install(addsNonce)
+        }
+        List(3) { async { installedAfter.get("https://api.example.com/users") } }.awaitAll()
+        assertEquals(1, requestCount.value, "Expected the header to be added after deduplication")
     }
 
     @Test
