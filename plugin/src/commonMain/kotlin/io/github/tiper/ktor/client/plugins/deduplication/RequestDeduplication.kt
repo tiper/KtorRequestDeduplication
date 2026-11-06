@@ -6,8 +6,13 @@ import io.ktor.client.plugins.api.ClientPlugin
 import io.ktor.client.plugins.api.Send
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.request.HttpRequestBuilder
+import io.ktor.client.utils.EmptyContent
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpMethod.Companion.Get
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.content.OutgoingContent.ByteArrayContent
+import io.ktor.util.AttributeKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -24,17 +29,15 @@ import kotlinx.coroutines.withContext
  * Configuration for the request deduplication plugin.
  *
  * @property deduplicateMethods HTTP methods to deduplicate. Default: only GET
- * @property excludeHeaders Headers to exclude from cache key computation.
+ * @property excludeHeaders Headers to exclude from cache key computation, matched regardless of case.
  *                         These are typically tracing/telemetry headers that vary per request
  *                         and should not affect deduplication.
- *                         **Note:** Header matching is case-sensitive. Ensure the casing matches
- *                         exactly how your HTTP client/SDK sends the headers.
  */
 class RequestDeduplicationConfig {
     var deduplicateMethods: Set<HttpMethod> = setOf(Get)
 
     /**
-     * Headers to EXCLUDE from cache key computation (case-sensitive).
+     * Headers to EXCLUDE from cache key computation, matched regardless of case.
      * Empty by default - all headers are included in the cache key.
      *
      * Add tracing/telemetry headers that vary per request and should not affect deduplication.
@@ -46,10 +49,6 @@ class RequestDeduplicationConfig {
      * - Firebase: `X-Firebase-Locale`, `X-Firebase-Auth-Time`
      * - AWS: `X-Amzn-Trace-Id`
      * - Google Cloud: `X-Cloud-Trace-Context`
-     *
-     * **Important:** Header names must match exactly how they appear in the request.
-     * If your SDK uses different casing (e.g., "x-trace-id" vs "X-Trace-Id"),
-     * add both variants or check your SDK's documentation for the correct casing.
      */
     var excludeHeaders: Set<String> = emptySet()
 
@@ -85,7 +84,7 @@ class RequestDeduplicationConfig {
 /**
  * Ktor client plugin that deduplicates concurrent HTTP requests.
  *
- * When multiple requests are made to the same URL concurrently, only one actual
+ * When multiple identical requests are made concurrently, only one actual
  * request is executed, and all callers receive the same response. Once that request
  * completes, the shared response is released and new requests
  * will trigger fresh HTTP calls.
@@ -97,36 +96,25 @@ class RequestDeduplicationConfig {
  *
  * **Cancellation Behavior:**
  * - If one caller cancels, other concurrent callers still receive the response
- * - If the leader is cancelled, surviving waiters automatically retry as a new deduplicated group
+ * - If the leader is cancelled, its HTTP call is aborted and surviving waiters retry as a new
+ *   deduplicated group, which sends a second HTTP request
  * - If all callers cancel, the in-flight entry is removed and resources are freed
  *
- * **⚠️ CRITICAL: Plugin Installation Order**
+ * **Plugin Installation Order**
  *
- * Plugin order matters! The order affects what gets included in the deduplication cache key.
+ * Most plugins change the request before it reaches the Send step, where deduplication happens.
+ * Their changes are always part of the cache key, wherever they are installed. This covers
+ * `DefaultRequest`, `Auth`, and any plugin using `onRequest`. To stop such a header from affecting
+ * deduplication, add it to [RequestDeduplicationConfig.excludeHeaders].
  *
- * **Plugins BEFORE RequestDeduplication:** Their modifications (headers, auth tokens, etc.)
- * are included in the cache key. Use this for plugins you want to affect deduplication behavior.
+ * The exception is a token refreshed by `Auth` after a 401. That resend starts at the Send step, so
+ * the new token is only in the cache key when `Auth` is installed first. Refreshing works in either
+ * order: concurrent callers share one refresh and one resend.
  *
- * **Plugins AFTER RequestDeduplication:** Their modifications happen after deduplication,
- * so they don't affect the cache key. Use this for plugins that shouldn't interfere.
- *
- * **Example:**
- * ```kotlin
- * val client = HttpClient {
- *     // Before: modifications included in cache key
- *     install(DefaultRequest) { ... }    // Headers affect cache key
- *     install(Auth) { ... }              // Token affects cache key
- *
- *     install(RequestDeduplication)      // Deduplication based on above
- *
- *     // After: don't affect cache key
- *     install(OtherAuth) { ... }         // Token that doesn't affect cache key
- *     install(Logging) { ... }           // Only logs, no effect on cache
- *     install(HttpTimeout) { ... }       // Applied after dedup
- * }
- * ```
- *
- * Consider your requirements and test to ensure the order matches your expected behavior.
+ * Order only matters for plugins that change the request in `on(Send)`:
+ * - **Installed BEFORE RequestDeduplication:** their changes are part of the cache key.
+ * - **Installed AFTER RequestDeduplication:** their changes come after deduplication, so they are
+ *   not part of the cache key, and only run for the request that is actually sent.
  *
  * **Use case:** Optimize scenarios where multiple components might request the same data simultaneously
  *
@@ -159,9 +147,9 @@ class RequestDeduplicationConfig {
  * }
  * ```
  *
- * **Finding the correct header casing:**
- * If deduplication isn't working as expected, check the actual header names sent by your SDK.
- * You can temporarily log the headers to verify the exact casing:
+ * **Finding headers that vary:**
+ * If deduplication isn't working as expected, a header probably differs between requests.
+ * You can temporarily log the headers to find it:
  * ```kotlin
  * install(Logging) {
  *     level = LogLevel.HEADERS
@@ -174,7 +162,8 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 ) {
     val config = pluginConfig
     val mutex = Mutex()
-    val inFlight = mutableMapOf<String, CompletableDeferred<HttpClientCall>>()
+    val inFlight = mutableMapOf<CacheKey, CompletableDeferred<HttpClientCall>>()
+    val excludedHeaders = config.excludeHeaders.mapTo(mutableSetOf(), String::lowercase)
 
     suspend fun Send.Sender.execute(request: HttpRequestBuilder): HttpClientCall = if (config.minWindow < 1) {
         proceed(request).save()
@@ -186,7 +175,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         }
     }
 
-    suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: String): HttpClientCall {
+    suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: CacheKey): HttpClientCall {
         while (true) {
             val (isFirst, deferred) = mutex.withLock {
                 val existing = inFlight[cacheKey]
@@ -196,14 +185,13 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 
             if (isFirst) {
                 val result = runCatching { execute(request) }
-                // Publishing the result and dropping the entry happen under the same lock, so a
-                // waiter can never observe an already-completed deferred and spin on it.
+                // Dropping the entry first means a waiter can never observe an already-completed
+                // deferred and spin on it. Completing outside the lock matters because an
+                // unconfined waiter resumes right here, and would run caller code holding the lock.
                 withContext(NonCancellable) {
-                    mutex.withLock {
-                        inFlight.remove(cacheKey)
-                        result.fold(deferred::complete, deferred::completeExceptionally)
-                    }
+                    mutex.withLock { inFlight.remove(cacheKey) }
                 }
+                result.fold(deferred::complete, deferred::completeExceptionally)
                 return result.getOrThrow()
             }
 
@@ -219,18 +207,76 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     }
 
     on(Send) { request ->
-        if (request.method !in config.deduplicateMethods) return@on proceed(request)
-        deduplicate(request, request.buildCacheKey(config))
+        if (request.method !in config.deduplicateMethods || SkipDeduplication in request.attributes) {
+            return@on proceed(request)
+        }
+        val cacheKey = request.buildCacheKey(excludedHeaders) ?: return@on proceed(request)
+        deduplicate(request, cacheKey)
     }
 }
 
-private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig): String {
-    val headerHash = headers.entries()
-        .filter { (name, _) -> name !in config.excludeHeaders }
-        .sortedBy { (name, _) -> name }
-        .fold(0) { acc, (name, values) ->
-            // Polynomial rolling hash
-            31 * acc + "$name=${values.joinToString(",")}".hashCode()
-        }
-    return "${method.value}:${url.buildString()}|h=$headerHash"
+private val SkipDeduplication = AttributeKey<Unit>("SkipDeduplication")
+
+/**
+ * Sends this request on its own, without sharing it with concurrent identical requests.
+ *
+ * The plugin reads a shared response fully into memory before any caller sees it, so use this for
+ * responses that must be streamed, such as large downloads:
+ * ```kotlin
+ * client.prepareGet(url) { skipDeduplication() }.execute { response ->
+ *     response.bodyAsChannel().copyTo(file)
+ * }
+ * ```
+ */
+fun HttpRequestBuilder.skipDeduplication() {
+    attributes.put(SkipDeduplication, Unit)
 }
+
+/**
+ * Identifies requests that may share a response. Compares the real header values and body rather
+ * than a hash of them: a collision here would hand one caller the response meant for another.
+ *
+ * Holds copies, because a key must not change while it is in the in-flight map: callers can reuse a
+ * body buffer, and plugins that run after this one can append to a header.
+ */
+private data class CacheKey(
+    val method: HttpMethod,
+    val url: String,
+    val headers: Map<String, List<String>>,
+    val contentHeaders: Map<String, List<String>>,
+    val contentType: String?,
+    val body: List<Byte>,
+) {
+    // Hashing walks the whole body, so doing it once here keeps it out of the in-flight lock, which
+    // every request shares.
+    private val hash = listOf(method, url, headers, contentHeaders, contentType, body).hashCode()
+
+    override fun hashCode() = hash
+}
+
+/**
+ * Returns `null` for a request that cannot be deduplicated. Only bodies that can be compared qualify:
+ * a streamed body can be read only once, and WebSocket and SSE requests open a live connection
+ * that cannot be shared, so all of them must go through on their own.
+ */
+private fun HttpRequestBuilder.buildCacheKey(excludedHeaders: Set<String>): CacheKey? {
+    val content = body as? OutgoingContent ?: return null
+    val bytes = when (content) {
+        is EmptyContent -> emptyList()
+        is ByteArrayContent -> content.bytes().copyOf().asList()
+        else -> return null
+    }
+    return CacheKey(
+        method = method,
+        url = url.buildString(),
+        headers = headers.entries().toKeyHeaders(excludedHeaders),
+        contentHeaders = content.headers.entries().toKeyHeaders(excludedHeaders),
+        // The default transformers move Content-Type out of the request headers and into the body.
+        contentType = content.contentType?.toString().takeUnless { HttpHeaders.ContentType.lowercase() in excludedHeaders },
+        body = bytes,
+    )
+}
+
+private fun Set<Map.Entry<String, List<String>>>.toKeyHeaders(excludedHeaders: Set<String>) = associate { (name, values) ->
+    name.lowercase() to values.toList()
+} - excludedHeaders

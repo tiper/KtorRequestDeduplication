@@ -1,26 +1,42 @@
 package io.github.tiper.ktor.client.plugins.deduplication
 
 import io.ktor.client.HttpClient
+import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
+import io.ktor.client.plugins.api.Send
+import io.ktor.client.plugins.api.createClientPlugin
+import io.ktor.client.plugins.sse.SSEClientContent
+import io.ktor.client.request.ClientUpgradeContent
 import io.ktor.client.request.get
 import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.utils.EmptyContent
+import io.ktor.http.ContentType.Application
+import io.ktor.http.ContentType.MultiPart
+import io.ktor.http.ContentType.Text
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders.ContentType
 import io.ktor.http.HttpMethod.Companion.Get
 import io.ktor.http.HttpMethod.Companion.Head
 import io.ktor.http.HttpMethod.Companion.Post
 import io.ktor.http.HttpStatusCode.Companion.InternalServerError
 import io.ktor.http.HttpStatusCode.Companion.NotFound
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.contentType
 import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.InternalAPI
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -291,50 +307,59 @@ class RequestDeduplicationTest {
     }
 
     @Test
-    fun cache_key_is_case_sensitive_for_headers() = runTest {
+    fun excluded_headers_match_regardless_of_case() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = {
-                excludeHeaders = setOf("X-Trace-Id") // Exact case
-            },
-        ) {
+        val client = mockClient(config = { excludeHeaders = setOf("X-Trace-Id") }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
-        val responses = listOf(
+        listOf("X-Trace-Id", "x-trace-id", "X-TRACE-ID").mapIndexed { index, name ->
             async {
                 client.get("https://api.example.com/users") {
-                    header("X-Trace-Id", "trace-1") // Matches exclude list
+                    header(name, "trace-$index")
                 }
-            },
-            async {
-                client.get("https://api.example.com/users") {
-                    header("x-trace-id", "trace-2") // Different case - not excluded
-                }
-            },
-        ).awaitAll()
+            }
+        }.awaitAll()
 
-        assertEquals(2, requestCount.value, "Expected 2 separate network requests due to case sensitivity in headers")
-        assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected different response bodies due to case sensitivity in headers")
+        assertEquals(1, requestCount.value, "Header names are case-insensitive, so all three are excluded")
     }
 
     @Test
-    fun concurrent_requests_with_no_headers_are_deduplicated() = runTest {
+    fun cache_key_ignores_header_name_case() = runTest {
         val requestCount = atomic(0)
         val client = mockClient {
             "response-${requestCount.incrementAndGet()}"
         }
 
-        val responses = List(10) {
+        listOf("X-Custom-Header", "x-custom-header").map { name ->
             async {
-                client.get("https://api.example.com/users")
+                client.get("https://api.example.com/users") {
+                    header(name, "value")
+                }
             }
         }.awaitAll()
 
-        assertEquals(1, requestCount.value)
-        responses.forEach { response ->
-            assertEquals("response-1", response.bodyAsText())
+        assertEquals(1, requestCount.value, "Header names are case-insensitive, so these are the same header")
+    }
+
+    @Test
+    fun header_values_with_colliding_hashes_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
         }
+
+        // "Aa" and "BB" have the same String.hashCode().
+        val responses = listOf("Bearer tokenAa", "Bearer tokenBB").map { token ->
+            async {
+                client.get("https://api.example.com/users") {
+                    header("Authorization", token)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Different credentials must never share a response")
+        assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected one response per credential")
     }
 
     @Test
@@ -372,30 +397,6 @@ class RequestDeduplicationTest {
         assertEquals("response-2", sequential1.bodyAsText())
         batch2.forEach { assertEquals("response-3", it.bodyAsText()) }
         assertEquals("response-4", sequential2.bodyAsText())
-    }
-
-    @Test
-    fun empty_exclude_headers_list_includes_all_headers_in_cache_key() = runTest {
-        val requestCount = atomic(0)
-        val client = mockClient(config = { excludeHeaders = emptySet() }) {
-            "response-${requestCount.incrementAndGet()}"
-        }
-
-        val responses = listOf(
-            async {
-                client.get("https://api.example.com/users") {
-                    header("X-Custom-Header", "value1")
-                }
-            },
-            async {
-                client.get("https://api.example.com/users") {
-                    header("X-Custom-Header", "value2")
-                }
-            },
-        ).awaitAll()
-
-        assertEquals(2, requestCount.value, "Expected 2 separate network requests due to different header values")
-        assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected different response bodies due to different header values")
     }
 
     @Test
@@ -475,9 +476,9 @@ class RequestDeduplicationTest {
     }
 
     @Test
-    fun request_with_body_is_deduplicated_correctly() = runTest {
+    fun requests_with_the_same_body_are_deduplicated() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient {
+        val client = mockClient(config = { deduplicateMethods += Post }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -489,8 +490,364 @@ class RequestDeduplicationTest {
             }
         }.awaitAll()
 
-        // POST with body should not be deduplicated by default
-        assertEquals(3, requestCount.value, "Expected 3 separate network requests for POST with body")
+        assertEquals(1, requestCount.value, "Expected identical bodies to share one network request")
+    }
+
+    @Test
+    fun requests_with_different_bodies_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val responses = listOf("alice", "bob").map { name ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(name)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Different bodies must never share a response")
+        assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected one response per body")
+    }
+
+    @Test
+    fun requests_with_different_binary_bodies_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(byteArrayOf(1, 2), byteArrayOf(1, 3)).map { bytes ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(bytes)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Different bodies must never share a response")
+    }
+
+    @Test
+    fun same_body_with_different_content_types_is_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(Application.Json, Text.Plain).map { type ->
+            async {
+                client.post("https://api.example.com/users") {
+                    contentType(type)
+                    setBody("123")
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "The default transformers move Content-Type from the headers to the body")
+    }
+
+    @Test
+    fun content_type_parameters_differing_only_in_case_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf("Aa", "aa").map { boundary ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(
+                        object : OutgoingContent.ByteArrayContent() {
+                            override val contentType = MultiPart.FormData.withParameter("boundary", boundary)
+                            override fun bytes() = byteArrayOf(1, 2)
+                        },
+                    )
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Multipart boundaries are case-sensitive")
+    }
+
+    @Test
+    fun excluded_content_type_is_ignored_for_transformed_bodies() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(
+            config = {
+                deduplicateMethods += Post
+                excludeHeaders = setOf("Content-Type")
+            },
+        ) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(Application.Json, Text.Plain).map { type ->
+            async {
+                client.post("https://api.example.com/users") {
+                    contentType(type)
+                    setBody("123")
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected excluded headers to be ignored wherever they come from")
+    }
+
+    @Test
+    fun requests_with_a_streamed_body_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        List(2) {
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(ByteReadChannel("request-body"))
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "A streamed body can only be read once, so it cannot be compared")
+    }
+
+    @OptIn(InternalAPI::class)
+    @Test
+    fun websocket_upgrades_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        List(2) {
+            async {
+                client.get("https://api.example.com/socket") {
+                    setBody(object : ClientUpgradeContent() {
+                        override fun verify(headers: Headers) = Unit
+                    })
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Each socket is a live connection and cannot be shared")
+    }
+
+    @OptIn(InternalAPI::class)
+    @Test
+    fun server_sent_events_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        List(2) {
+            async {
+                client.get("https://api.example.com/events") {
+                    setBody(SSEClientContent(1.seconds, showCommentEvents = false, showRetryEvents = false, requestBody = EmptyContent))
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Each event stream is a live connection and cannot be shared")
+    }
+
+    @Test
+    fun skipDeduplication_sends_every_request() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val responses = List(3) {
+            async {
+                client.get("https://api.example.com/users") {
+                    skipDeduplication()
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(3, requestCount.value, "Expected every skipped request to reach the network")
+        assertEquals(3, responses.map { it.bodyAsText() }.toSet().size, "Expected one response per request")
+    }
+
+    @Test
+    fun skipDeduplication_does_not_affect_other_requests() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(
+            async { client.get("https://api.example.com/users") },
+            async { client.get("https://api.example.com/users") },
+            async { client.get("https://api.example.com/users") { skipDeduplication() } },
+        ).awaitAll()
+
+        assertEquals(2, requestCount.value, "Expected 1 shared request plus the skipped one")
+    }
+
+    @Test
+    fun onRequest_changes_are_in_the_cache_key_wherever_the_plugin_is_installed() = runTest {
+        val requestCount = atomic(0)
+        val nonce = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    delay(100)
+                    respond("response")
+                }
+            }
+            install(RequestDeduplication)
+            install(
+                createClientPlugin("AddsNonce") {
+                    onRequest { request, _ -> request.headers.append("X-Nonce", "${nonce.incrementAndGet()}") }
+                },
+            )
+        }
+
+        List(3) { async { client.get("https://api.example.com/users") } }.awaitAll()
+
+        assertEquals(3, requestCount.value, "onRequest runs before the Send step, so install order doesn't matter")
+    }
+
+    @Test
+    fun send_changes_are_only_in_the_cache_key_when_installed_before() = runTest {
+        val nonce = atomic(0)
+        val addsNonce = createClientPlugin("AddsNonce") {
+            on(Send) { request ->
+                request.headers.append("X-Nonce", "${nonce.incrementAndGet()}")
+                proceed(request)
+            }
+        }
+        val requestCount = atomic(0)
+        fun HttpClientConfig<MockEngineConfig>.countRequests() = engine {
+            addHandler {
+                requestCount.incrementAndGet()
+                delay(100)
+                respond("response")
+            }
+        }
+
+        val installedBefore = HttpClient(MockEngine) {
+            countRequests()
+            install(addsNonce)
+            install(RequestDeduplication)
+        }
+        List(3) { async { installedBefore.get("https://api.example.com/users") } }.awaitAll()
+        assertEquals(3, requestCount.value, "Expected the header to split the requests")
+
+        requestCount.value = 0
+        val installedAfter = HttpClient(MockEngine) {
+            countRequests()
+            install(RequestDeduplication)
+            install(addsNonce)
+        }
+        List(3) { async { installedAfter.get("https://api.example.com/users") } }.awaitAll()
+        assertEquals(1, requestCount.value, "Expected the header to be added after deduplication")
+    }
+
+    @Test
+    fun bodies_with_different_content_headers_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf("tenant-1", "tenant-2").map { tenant ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(
+                        object : OutgoingContent.ByteArrayContent() {
+                            override val headers = headersOf("X-Tenant", tenant)
+                            override fun bytes() = byteArrayOf(1, 2)
+                        },
+                    )
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Headers supplied by the body are sent too, so they must split requests")
+    }
+
+    @Test
+    fun excluded_headers_also_apply_to_content_headers() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(
+            config = {
+                deduplicateMethods += Post
+                excludeHeaders = setOf("X-Trace-Id")
+            },
+        ) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf("trace-1", "trace-2").map { trace ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(
+                        object : OutgoingContent.ByteArrayContent() {
+                            override val headers = headersOf("x-trace-id", trace)
+                            override fun bytes() = byteArrayOf(1, 2)
+                        },
+                    )
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected excluded headers to be ignored wherever they come from")
+    }
+
+    @Test
+    fun reusing_a_body_buffer_does_not_change_the_in_flight_key() = runTest {
+        val requestCount = atomic(0)
+        val buffer = byteArrayOf(1, 2)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val first = async { client.post("https://api.example.com/users") { setBody(buffer) } }
+        delay(10)
+        buffer.fill(9)
+        val second = async { client.post("https://api.example.com/users") { setBody(byteArrayOf(1, 2)) } }
+        listOf(first, second).awaitAll()
+
+        assertEquals(1, requestCount.value, "The key must keep the body as it was when the request started")
+    }
+
+    @Test
+    fun appending_to_a_header_in_a_later_plugin_does_not_change_the_in_flight_key() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    delay(100)
+                    respond("response")
+                }
+            }
+            install(RequestDeduplication)
+            install(
+                createClientPlugin("AppendsToHeader") {
+                    on(Send) { request ->
+                        request.headers.append("X-Custom", "appended")
+                        proceed(request)
+                    }
+                },
+            )
+        }
+
+        List(2) { index ->
+            async {
+                delay(index * 10L)
+                client.get("https://api.example.com/users") { header("X-Custom", "value") }
+            }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "The key must keep the headers as they were when the request started")
     }
 
     @Test
@@ -511,60 +868,6 @@ class RequestDeduplicationTest {
         assertEquals(1, requestCount.value, "Expected only 1 network request for 100 concurrent requests")
 
         // All responses should be identical
-        responses.forEach { response ->
-            assertEquals("response-1", response.bodyAsText())
-        }
-    }
-
-    @Test
-    fun concurrent_requests_with_same_headers_but_different_values_are_not_deduplicated() = runTest {
-        val requestCount = atomic(0)
-        val client = mockClient {
-            "response-${requestCount.incrementAndGet()}"
-        }
-
-        val responses = listOf(
-            async {
-                client.get("https://api.example.com/users") {
-                    header("X-User-ID", "user1")
-                }
-            },
-            async {
-                client.get("https://api.example.com/users") {
-                    header("X-User-ID", "user2")
-                }
-            },
-            async {
-                client.get("https://api.example.com/users") {
-                    header("X-User-ID", "user3")
-                }
-            },
-        ).awaitAll()
-
-        // Different header values should create different cache keys
-        assertEquals(3, requestCount.value, "Expected 3 separate network requests for different header values")
-        assertEquals(3, responses.map { it.bodyAsText() }.toSet().size, "Expected different response bodies")
-    }
-
-    @Test
-    fun requests_with_multiple_excluded_headers_are_deduplicated() = runTest {
-        val requestCount = atomic(0)
-        val client = mockClient(config = { excludeHeaders = setOf("X-Trace-Id", "X-Request-Id", "X-Session-Id") }) {
-            "response-${requestCount.incrementAndGet()}"
-        }
-
-        val responses = List(5) { index ->
-            async {
-                client.get("https://api.example.com/users") {
-                    header("X-Trace-Id", "trace-$index")
-                    header("X-Request-Id", "req-$index")
-                    header("X-Session-Id", "session-$index")
-                }
-            }
-        }.awaitAll()
-
-        // All excluded headers vary but requests should still be deduplicated
-        assertEquals(1, requestCount.value, "Expected only 1 network request with multiple excluded headers")
         responses.forEach { response ->
             assertEquals("response-1", response.bodyAsText())
         }
@@ -598,24 +901,6 @@ class RequestDeduplicationTest {
         assertEquals("response-1", response0.bodyAsText())
         assertEquals("response-1", response2.bodyAsText())
         assertEquals("response-1", response4.bodyAsText())
-    }
-
-    @Test
-    fun rapid_sequential_requests_are_not_deduplicated() = runTest {
-        val requestCount = atomic(0)
-        val client = mockClient {
-            "response-${requestCount.incrementAndGet()}"
-        }
-
-        // Make rapid sequential requests (not concurrent)
-        val responses = mutableListOf<String>()
-        repeat(5) {
-            val response = client.get("https://api.example.com/users")
-            responses.add(response.bodyAsText())
-        }
-
-        assertEquals(5, requestCount.value, "Expected 5 separate network requests for rapid sequential calls")
-        assertEquals(listOf("response-1", "response-2", "response-3", "response-4", "response-5"), responses)
     }
 
     @Test
@@ -812,30 +1097,6 @@ class RequestDeduplicationTest {
         responses.forEach { response ->
             assertEquals(NotFound, response.status)
         }
-    }
-
-    @Test
-    fun test_POST_requests_not_deduplicated_by_default() = runTest {
-        val requestCount = atomic(0)
-        val client = HttpClient(MockEngine) {
-            engine {
-                addHandler {
-                    respond("response-${requestCount.incrementAndGet()}")
-                }
-            }
-            install(RequestDeduplication) // Default config only deduplicates GET
-        }
-
-        val responses = List(3) {
-            async {
-                client.post("https://api.example.com/users") {
-                    setBody("same body")
-                }
-            }
-        }.awaitAll()
-
-        assertEquals(3, requestCount.value, "Expected 3 separate POST requests (POST not deduplicated by default)")
-        assertEquals(setOf("response-1", "response-2", "response-3"), responses.map { it.bodyAsText() }.toSet())
     }
 
     @Test

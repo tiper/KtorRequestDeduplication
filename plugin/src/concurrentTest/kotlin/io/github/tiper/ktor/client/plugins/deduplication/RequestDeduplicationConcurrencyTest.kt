@@ -1,9 +1,21 @@
 package io.github.tiper.ktor.client.plugins.deduplication
 
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpStatusCode.Companion.OK
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.readAvailable
+import io.ktor.utils.io.writeStringUtf8
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -13,10 +25,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
 private const val URL = "https://api.example.com/users"
+private const val OTHER_URL = "https://api.example.com/other"
 
 /**
  * `runTest` queues every resumption on a single thread, so a waiter can never resume *inside* the
@@ -63,5 +77,83 @@ class RequestDeduplicationConcurrencyTest {
 
         client.close()
         scope.cancel()
+    }
+
+    @Test
+    fun waiter_resumed_inline_does_not_block_unrelated_requests() = runBlocking {
+        val leaderInFlight = CompletableDeferred<Unit>()
+        val releaseLeader = CompletableDeferred<Unit>()
+        val waiterResumed = atomic(false)
+        val otherRequestSent = atomic(false)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    if (request.url.toString() == OTHER_URL) {
+                        otherRequestSent.value = true
+                    } else {
+                        leaderInFlight.complete(Unit)
+                        releaseLeader.await()
+                    }
+                    respond("response")
+                }
+            }
+            install(RequestDeduplication)
+        }
+        val scope = CoroutineScope(SupervisorJob())
+
+        scope.launch(Dispatchers.Default) { client.get(URL) }
+        leaderInFlight.await()
+        // Unconfined, so the waiter carries on as caller code on the leader's own stack.
+        val waiter = scope.async(Dispatchers.Unconfined) {
+            client.get(URL)
+            waiterResumed.value = true
+            // Caller code that doesn't suspend. If the leader's lock were still held here, the
+            // request below could not get through until this code let go of the thread.
+            val deadline = TimeSource.Monotonic.markNow() + 2.seconds
+            while (!otherRequestSent.value && deadline.hasNotPassedNow()) Unit
+            otherRequestSent.value
+        }
+        delay(50)
+        releaseLeader.complete(Unit)
+        withTimeout(10_000) { while (!waiterResumed.value) delay(1) }
+
+        scope.launch(Dispatchers.Default) { client.get(OTHER_URL) }
+
+        assertTrue(withTimeout(10_000) { waiter.await() }, "Caller code must not run while the lock is held")
+
+        client.close()
+        scope.cancel()
+    }
+
+    @Test
+    fun skipDeduplication_keeps_the_response_streaming() = runBlocking {
+        val firstChunkRead = CompletableDeferred<Unit>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    val channel = ByteChannel(autoFlush = true)
+                    // The stream only ends once the caller has read from it, so a plugin that
+                    // buffers the whole body first never gets past this point.
+                    launch {
+                        channel.writeStringUtf8("chunk")
+                        firstChunkRead.await()
+                        channel.close()
+                    }
+                    respond(channel, OK)
+                }
+            }
+            install(RequestDeduplication)
+        }
+
+        withTimeout(5_000) {
+            client.prepareGet(URL) { skipDeduplication() }.execute { response ->
+                val chunk = ByteArray(5)
+                response.bodyAsChannel().readAvailable(chunk)
+                firstChunkRead.complete(Unit)
+                assertEquals("chunk", chunk.decodeToString())
+            }
+        }
+
+        client.close()
     }
 }
