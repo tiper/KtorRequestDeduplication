@@ -6,8 +6,12 @@ import io.ktor.client.plugins.api.ClientPlugin
 import io.ktor.client.plugins.api.Send
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.request.HttpRequestBuilder
+import io.ktor.client.utils.EmptyContent
+import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpMethod.Companion.Get
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.content.OutgoingContent.ByteArrayContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -220,24 +224,43 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 
     on(Send) { request ->
         if (request.method !in config.deduplicateMethods) return@on proceed(request)
-        deduplicate(request, request.buildCacheKey(config))
+        val cacheKey = request.buildCacheKey(config) ?: return@on proceed(request)
+        deduplicate(request, cacheKey)
     }
 }
 
 /**
- * Identifies requests that may share a response. Compares the real header values rather than a hash
- * of them: a collision here would hand one caller the response meant for another.
+ * Identifies requests that may share a response. Compares the real header values and body rather
+ * than a hash of them: a collision here would hand one caller the response meant for another.
  */
 private data class CacheKey(
     val method: HttpMethod,
     val url: String,
     val headers: Map<String, List<String>>,
+    val contentType: ContentType?,
+    val body: List<Byte>,
 )
 
-private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig) = CacheKey(
-    method = method,
-    url = url.buildString(),
-    headers = headers.entries()
-        .filter { (name, _) -> name !in config.excludeHeaders }
-        .associate { (name, values) -> name to values },
-)
+/**
+ * Returns `null` for a request that cannot be deduplicated. Only bodies that can be compared qualify:
+ * a streamed body can be read only once, and WebSocket and SSE requests open a live connection
+ * that cannot be shared, so all of them must go through on their own.
+ */
+private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig): CacheKey? {
+    val content = body as? OutgoingContent ?: return null
+    val bytes = when (content) {
+        is EmptyContent -> emptyList()
+        is ByteArrayContent -> content.bytes().asList()
+        else -> return null
+    }
+    return CacheKey(
+        method = method,
+        url = url.buildString(),
+        headers = headers.entries()
+            .filter { (name, _) -> name !in config.excludeHeaders }
+            .associate { (name, values) -> name to values },
+        // The default transformers move Content-Type out of the request headers and into the body.
+        contentType = content.contentType,
+        body = bytes,
+    )
+}

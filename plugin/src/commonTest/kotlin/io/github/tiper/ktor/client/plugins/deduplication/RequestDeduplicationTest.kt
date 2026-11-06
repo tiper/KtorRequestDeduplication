@@ -4,23 +4,33 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
+import io.ktor.client.plugins.sse.SSEClientContent
+import io.ktor.client.request.ClientUpgradeContent
 import io.ktor.client.request.get
 import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.utils.EmptyContent
+import io.ktor.http.ContentType.Application
+import io.ktor.http.ContentType.Text
+import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders.ContentType
 import io.ktor.http.HttpMethod.Companion.Get
 import io.ktor.http.HttpMethod.Companion.Head
 import io.ktor.http.HttpMethod.Companion.Post
 import io.ktor.http.HttpStatusCode.Companion.InternalServerError
 import io.ktor.http.HttpStatusCode.Companion.NotFound
+import io.ktor.http.contentType
 import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.InternalAPI
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.atomicfu.atomic
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -495,9 +505,9 @@ class RequestDeduplicationTest {
     }
 
     @Test
-    fun request_with_body_is_deduplicated_correctly() = runTest {
+    fun requests_with_the_same_body_are_deduplicated() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient {
+        val client = mockClient(config = { deduplicateMethods += Post }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
@@ -509,8 +519,121 @@ class RequestDeduplicationTest {
             }
         }.awaitAll()
 
-        // POST with body should not be deduplicated by default
-        assertEquals(3, requestCount.value, "Expected 3 separate network requests for POST with body")
+        assertEquals(1, requestCount.value, "Expected identical bodies to share one network request")
+    }
+
+    @Test
+    fun requests_with_different_bodies_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val responses = listOf("alice", "bob").map { name ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(name)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Different bodies must never share a response")
+        assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected one response per body")
+    }
+
+    @Test
+    fun requests_with_different_binary_bodies_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(byteArrayOf(1, 2), byteArrayOf(1, 3)).map { bytes ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(bytes)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Different bodies must never share a response")
+    }
+
+    @Test
+    fun same_body_with_different_content_types_is_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(Application.Json, Text.Plain).map { type ->
+            async {
+                client.post("https://api.example.com/users") {
+                    contentType(type)
+                    setBody("123")
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "The default transformers move Content-Type from the headers to the body")
+    }
+
+    @Test
+    fun requests_with_a_streamed_body_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        List(2) {
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(ByteReadChannel("request-body"))
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "A streamed body can only be read once, so it cannot be compared")
+    }
+
+    @OptIn(InternalAPI::class)
+    @Test
+    fun websocket_upgrades_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        List(2) {
+            async {
+                client.get("https://api.example.com/socket") {
+                    setBody(object : ClientUpgradeContent() {
+                        override fun verify(headers: Headers) = Unit
+                    })
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Each socket is a live connection and cannot be shared")
+    }
+
+    @OptIn(InternalAPI::class)
+    @Test
+    fun server_sent_events_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        List(2) {
+            async {
+                client.get("https://api.example.com/events") {
+                    setBody(SSEClientContent(1.seconds, showCommentEvents = false, showRetryEvents = false, requestBody = EmptyContent))
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Each event stream is a live connection and cannot be shared")
     }
 
     @Test

@@ -130,7 +130,7 @@ val client = HttpClient {
 
 ## How It Works
 
-1. **Request Interception**: When a request is made, the plugin generates a cache key from the HTTP method, URL, and headers (excluding those in `excludeHeaders`).
+1. **Request Interception**: When a request is made, the plugin generates a cache key from the HTTP method, URL, headers (excluding those in `excludeHeaders`), and body.
 2. **Deduplication Check**: If another request with the same cache key is in-flight, the plugin waits for it to complete. Deduplication only applies to concurrent requests; sequential requests are not deduplicated.
 3. **Response Sharing**: The first request's response body is read once into memory and shared with all waiting callers (including error responses). The response is **not cached** - it's only shared during the concurrent execution window.
 4. **Cleanup**: After all concurrent callers complete, the shared response is released and the entry is removed. Subsequent requests will trigger new HTTP calls.
@@ -141,8 +141,13 @@ The cache key is built from:
 - HTTP method (GET, POST, etc.)
 - Full URL including query parameters
 - Request headers (excluding those in `excludeHeaders`)
+- Request body and its `Content-Type`
 
-The key holds the actual header names and values, not a hash of them, so requests with different credentials can never collide. Header order doesn't matter.
+The key holds the actual headers and body, not a hash of them, so requests with different credentials or bodies can never collide. Header order doesn't matter.
+
+Only text and byte array bodies can be compared. Requests that can't be compared go straight through without deduplication:
+- Streamed bodies (channels, multipart), which can only be read once
+- WebSocket and Server-Sent Events requests, which open a live connection that can't be shared
 
 ## Configuration Options
 
