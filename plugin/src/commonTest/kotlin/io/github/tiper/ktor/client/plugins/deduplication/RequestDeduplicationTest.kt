@@ -319,6 +319,26 @@ class RequestDeduplicationTest {
     }
 
     @Test
+    fun header_values_with_colliding_hashes_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        // "Aa" and "BB" have the same String.hashCode().
+        val responses = listOf("Bearer tokenAa", "Bearer tokenBB").map { token ->
+            async {
+                client.get("https://api.example.com/users") {
+                    header("Authorization", token)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Different credentials must never share a response")
+        assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected one response per credential")
+    }
+
+    @Test
     fun concurrent_requests_with_no_headers_are_deduplicated() = runTest {
         val requestCount = atomic(0)
         val client = mockClient {

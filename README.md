@@ -142,10 +142,7 @@ The cache key is built from:
 - Full URL including query parameters
 - Request headers (excluding those in `excludeHeaders`)
 
-Headers are combined using **polynomial rolling hash** to ensure order-independence and collision resistance:
-```
-GET:https://api.example.com/users?id=123|h=1847563829
-```
+The key holds the actual header names and values, not a hash of them, so requests with different credentials can never collide. Header order doesn't matter.
 
 ## Configuration Options
 

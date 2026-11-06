@@ -174,7 +174,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 ) {
     val config = pluginConfig
     val mutex = Mutex()
-    val inFlight = mutableMapOf<String, CompletableDeferred<HttpClientCall>>()
+    val inFlight = mutableMapOf<CacheKey, CompletableDeferred<HttpClientCall>>()
 
     suspend fun Send.Sender.execute(request: HttpRequestBuilder): HttpClientCall = if (config.minWindow < 1) {
         proceed(request).save()
@@ -186,7 +186,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         }
     }
 
-    suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: String): HttpClientCall {
+    suspend fun Send.Sender.deduplicate(request: HttpRequestBuilder, cacheKey: CacheKey): HttpClientCall {
         while (true) {
             val (isFirst, deferred) = mutex.withLock {
                 val existing = inFlight[cacheKey]
@@ -224,13 +224,20 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     }
 }
 
-private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig): String {
-    val headerHash = headers.entries()
+/**
+ * Identifies requests that may share a response. Compares the real header values rather than a hash
+ * of them: a collision here would hand one caller the response meant for another.
+ */
+private data class CacheKey(
+    val method: HttpMethod,
+    val url: String,
+    val headers: Map<String, List<String>>,
+)
+
+private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig) = CacheKey(
+    method = method,
+    url = url.buildString(),
+    headers = headers.entries()
         .filter { (name, _) -> name !in config.excludeHeaders }
-        .sortedBy { (name, _) -> name }
-        .fold(0) { acc, (name, values) ->
-            // Polynomial rolling hash
-            31 * acc + "$name=${values.joinToString(",")}".hashCode()
-        }
-    return "${method.value}:${url.buildString()}|h=$headerHash"
-}
+        .associate { (name, values) -> name to values },
+)
