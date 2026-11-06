@@ -549,6 +549,30 @@ class RequestDeduplicationTest {
     }
 
     @Test
+    fun excluded_content_type_is_ignored_for_transformed_bodies() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(
+            config = {
+                deduplicateMethods += Post
+                excludeHeaders = setOf("Content-Type")
+            },
+        ) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf(Application.Json, Text.Plain).map { type ->
+            async {
+                client.post("https://api.example.com/users") {
+                    contentType(type)
+                    setBody("123")
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected excluded headers to be ignored wherever they come from")
+    }
+
+    @Test
     fun requests_with_a_streamed_body_are_not_deduplicated() = runTest {
         val requestCount = atomic(0)
         val client = mockClient(config = { deduplicateMethods += Post }) {
