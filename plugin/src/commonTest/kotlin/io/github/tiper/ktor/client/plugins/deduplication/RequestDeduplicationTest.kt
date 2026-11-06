@@ -26,6 +26,7 @@ import io.ktor.http.HttpMethod.Companion.Head
 import io.ktor.http.HttpMethod.Companion.Post
 import io.ktor.http.HttpStatusCode.Companion.InternalServerError
 import io.ktor.http.HttpStatusCode.Companion.NotFound
+import io.ktor.http.content.OutgoingContent
 import io.ktor.http.contentType
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
@@ -699,6 +700,106 @@ class RequestDeduplicationTest {
         }
         List(3) { async { installedAfter.get("https://api.example.com/users") } }.awaitAll()
         assertEquals(1, requestCount.value, "Expected the header to be added after deduplication")
+    }
+
+    @Test
+    fun bodies_with_different_content_headers_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf("tenant-1", "tenant-2").map { tenant ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(
+                        object : OutgoingContent.ByteArrayContent() {
+                            override val headers = headersOf("X-Tenant", tenant)
+                            override fun bytes() = byteArrayOf(1, 2)
+                        },
+                    )
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Headers supplied by the body are sent too, so they must split requests")
+    }
+
+    @Test
+    fun excluded_headers_also_apply_to_content_headers() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(
+            config = {
+                deduplicateMethods += Post
+                excludeHeaders = setOf("X-Trace-Id")
+            },
+        ) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf("trace-1", "trace-2").map { trace ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(
+                        object : OutgoingContent.ByteArrayContent() {
+                            override val headers = headersOf("x-trace-id", trace)
+                            override fun bytes() = byteArrayOf(1, 2)
+                        },
+                    )
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "Expected excluded headers to be ignored wherever they come from")
+    }
+
+    @Test
+    fun reusing_a_body_buffer_does_not_change_the_in_flight_key() = runTest {
+        val requestCount = atomic(0)
+        val buffer = byteArrayOf(1, 2)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        val first = async { client.post("https://api.example.com/users") { setBody(buffer) } }
+        delay(10)
+        buffer.fill(9)
+        val second = async { client.post("https://api.example.com/users") { setBody(byteArrayOf(1, 2)) } }
+        listOf(first, second).awaitAll()
+
+        assertEquals(1, requestCount.value, "The key must keep the body as it was when the request started")
+    }
+
+    @Test
+    fun appending_to_a_header_in_a_later_plugin_does_not_change_the_in_flight_key() = runTest {
+        val requestCount = atomic(0)
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    requestCount.incrementAndGet()
+                    delay(100)
+                    respond("response")
+                }
+            }
+            install(RequestDeduplication)
+            install(
+                createClientPlugin("AppendsToHeader") {
+                    on(Send) { request ->
+                        request.headers.append("X-Custom", "appended")
+                        proceed(request)
+                    }
+                },
+            )
+        }
+
+        List(2) { index ->
+            async {
+                delay(index * 10L)
+                client.get("https://api.example.com/users") { header("X-Custom", "value") }
+            }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "The key must keep the headers as they were when the request started")
     }
 
     @Test

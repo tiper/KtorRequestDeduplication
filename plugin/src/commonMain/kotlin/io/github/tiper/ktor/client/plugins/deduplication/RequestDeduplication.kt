@@ -231,11 +231,15 @@ fun HttpRequestBuilder.skipDeduplication() {
 /**
  * Identifies requests that may share a response. Compares the real header values and body rather
  * than a hash of them: a collision here would hand one caller the response meant for another.
+ *
+ * Holds copies, because a key must not change while it is in the in-flight map: callers can reuse a
+ * body buffer, and plugins that run after this one can append to a header.
  */
 private data class CacheKey(
     val method: HttpMethod,
     val url: String,
     val headers: Map<String, List<String>>,
+    val contentHeaders: Map<String, List<String>>,
     val contentType: ContentType?,
     val body: List<Byte>,
 )
@@ -249,15 +253,20 @@ private fun HttpRequestBuilder.buildCacheKey(excludedHeaders: Set<String>): Cach
     val content = body as? OutgoingContent ?: return null
     val bytes = when (content) {
         is EmptyContent -> emptyList()
-        is ByteArrayContent -> content.bytes().asList()
+        is ByteArrayContent -> content.bytes().copyOf().asList()
         else -> return null
     }
     return CacheKey(
         method = method,
         url = url.buildString(),
-        headers = headers.entries().associate { (name, values) -> name.lowercase() to values } - excludedHeaders,
+        headers = headers.entries().toKeyHeaders(excludedHeaders),
+        contentHeaders = content.headers.entries().toKeyHeaders(excludedHeaders),
         // The default transformers move Content-Type out of the request headers and into the body.
         contentType = content.contentType,
         body = bytes,
     )
 }
+
+private fun Set<Map.Entry<String, List<String>>>.toKeyHeaders(excludedHeaders: Set<String>) = associate { (name, values) ->
+    name.lowercase() to values.toList()
+} - excludedHeaders
