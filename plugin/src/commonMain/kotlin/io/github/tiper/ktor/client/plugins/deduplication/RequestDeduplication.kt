@@ -196,14 +196,13 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
 
             if (isFirst) {
                 val result = runCatching { execute(request) }
-                // Publishing the result and dropping the entry happen under the same lock, so a
-                // waiter can never observe an already-completed deferred and spin on it.
+                // Dropping the entry first means a waiter can never observe an already-completed
+                // deferred and spin on it. Completing outside the lock matters because an
+                // unconfined waiter resumes right here, and would run caller code holding the lock.
                 withContext(NonCancellable) {
-                    mutex.withLock {
-                        inFlight.remove(cacheKey)
-                        result.fold(deferred::complete, deferred::completeExceptionally)
-                    }
+                    mutex.withLock { inFlight.remove(cacheKey) }
                 }
+                result.fold(deferred::complete, deferred::completeExceptionally)
                 return result.getOrThrow()
             }
 
