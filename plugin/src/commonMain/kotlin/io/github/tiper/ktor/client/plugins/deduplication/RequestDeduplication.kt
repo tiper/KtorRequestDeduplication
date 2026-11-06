@@ -107,6 +107,10 @@ class RequestDeduplicationConfig {
  * `DefaultRequest`, `Auth`, and any plugin using `onRequest`. To stop such a header from affecting
  * deduplication, add it to [RequestDeduplicationConfig.excludeHeaders].
  *
+ * The exception is a token refreshed by `Auth` after a 401. That resend starts at the Send step, so
+ * the new token is only in the cache key when `Auth` is installed first. Refreshing works in either
+ * order: concurrent callers share one refresh and one resend.
+ *
  * Order only matters for plugins that change the request in `on(Send)`:
  * - **Installed BEFORE RequestDeduplication:** their changes are part of the cache key.
  * - **Installed AFTER RequestDeduplication:** their changes come after deduplication, so they are

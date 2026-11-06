@@ -83,6 +83,8 @@ launch { client.get("https://api.example.com/users") }
 
 Most plugins change the request before it reaches the Send step, where deduplication happens. Their changes are **always part of the cache key, wherever they are installed**. This covers `DefaultRequest`, `Auth`, and any plugin using `onRequest`. To stop such a header from affecting deduplication, add it to `excludeHeaders`.
 
+The exception is a token refreshed by `Auth` after a 401. That resend starts at the Send step, so the new token is only in the cache key when `Auth` is installed first. Refreshing works in either order: concurrent callers share one refresh and one resend.
+
 Order only matters for plugins that change the request in `on(Send)`:
 
 - **Installed before RequestDeduplication**: their changes are part of the cache key.
@@ -91,7 +93,7 @@ Order only matters for plugins that change the request in `on(Send)`:
 **Example:**
 ```kotlin
 val client = HttpClient {
-    install(Auth) { ... }              // In the cache key, even if installed last
+    install(Auth) { ... }              // Token in the cache key, even if installed last
     install(DefaultRequest) { ... }    // In the cache key, even if installed last
 
     install(BeforeDedup)               // on(Send) plugin: in the cache key
