@@ -7,7 +7,6 @@ import io.ktor.client.plugins.api.Send
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.utils.EmptyContent
-import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpMethod.Companion.Get
@@ -241,7 +240,7 @@ private data class CacheKey(
     val url: String,
     val headers: Map<String, List<String>>,
     val contentHeaders: Map<String, List<String>>,
-    val contentType: ContentType?,
+    val contentType: String?,
     val body: List<Byte>,
 )
 
@@ -263,7 +262,7 @@ private fun HttpRequestBuilder.buildCacheKey(excludedHeaders: Set<String>): Cach
         headers = headers.entries().toKeyHeaders(excludedHeaders),
         contentHeaders = content.headers.entries().toKeyHeaders(excludedHeaders),
         // The default transformers move Content-Type out of the request headers and into the body.
-        contentType = content.contentType.takeUnless { HttpHeaders.ContentType.lowercase() in excludedHeaders },
+        contentType = content.contentType?.toString().takeUnless { HttpHeaders.ContentType.lowercase() in excludedHeaders },
         body = bytes,
     )
 }

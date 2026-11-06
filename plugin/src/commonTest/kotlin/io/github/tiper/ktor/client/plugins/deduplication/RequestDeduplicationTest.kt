@@ -18,6 +18,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.utils.EmptyContent
 import io.ktor.http.ContentType.Application
+import io.ktor.http.ContentType.MultiPart
 import io.ktor.http.ContentType.Text
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders.ContentType
@@ -546,6 +547,29 @@ class RequestDeduplicationTest {
         }.awaitAll()
 
         assertEquals(2, requestCount.value, "The default transformers move Content-Type from the headers to the body")
+    }
+
+    @Test
+    fun content_type_parameters_differing_only_in_case_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf("Aa", "aa").map { boundary ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(
+                        object : OutgoingContent.ByteArrayContent() {
+                            override val contentType = MultiPart.FormData.withParameter("boundary", boundary)
+                            override fun bytes() = byteArrayOf(1, 2)
+                        },
+                    )
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "Multipart boundaries are case-sensitive")
     }
 
     @Test
