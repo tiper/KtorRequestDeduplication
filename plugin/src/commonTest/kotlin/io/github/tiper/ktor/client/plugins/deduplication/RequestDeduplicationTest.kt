@@ -301,31 +301,39 @@ class RequestDeduplicationTest {
     }
 
     @Test
-    fun cache_key_is_case_sensitive_for_headers() = runTest {
+    fun excluded_headers_match_regardless_of_case() = runTest {
         val requestCount = atomic(0)
-        val client = mockClient(
-            config = {
-                excludeHeaders = setOf("X-Trace-Id") // Exact case
-            },
-        ) {
+        val client = mockClient(config = { excludeHeaders = setOf("X-Trace-Id") }) {
             "response-${requestCount.incrementAndGet()}"
         }
 
-        val responses = listOf(
+        listOf("X-Trace-Id", "x-trace-id", "X-TRACE-ID").mapIndexed { index, name ->
             async {
                 client.get("https://api.example.com/users") {
-                    header("X-Trace-Id", "trace-1") // Matches exclude list
+                    header(name, "trace-$index")
                 }
-            },
-            async {
-                client.get("https://api.example.com/users") {
-                    header("x-trace-id", "trace-2") // Different case - not excluded
-                }
-            },
-        ).awaitAll()
+            }
+        }.awaitAll()
 
-        assertEquals(2, requestCount.value, "Expected 2 separate network requests due to case sensitivity in headers")
-        assertEquals(2, responses.map { it.bodyAsText() }.toSet().size, "Expected different response bodies due to case sensitivity in headers")
+        assertEquals(1, requestCount.value, "Header names are case-insensitive, so all three are excluded")
+    }
+
+    @Test
+    fun cache_key_ignores_header_name_case() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient {
+            "response-${requestCount.incrementAndGet()}"
+        }
+
+        listOf("X-Custom-Header", "x-custom-header").map { name ->
+            async {
+                client.get("https://api.example.com/users") {
+                    header(name, "value")
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(1, requestCount.value, "Header names are case-insensitive, so these are the same header")
     }
 
     @Test

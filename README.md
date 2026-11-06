@@ -190,7 +190,7 @@ install(RequestDeduplication) {
 **Type:** `Set<String>`
 **Default:** `emptySet()`
 
-Headers to exclude from cache key computation (case-sensitive). This is crucial for preventing tracing/telemetry headers from breaking deduplication.
+Headers to exclude from cache key computation, matched regardless of case. This is crucial for preventing tracing/telemetry headers from breaking deduplication.
 
 **Common headers to exclude:**
 
@@ -213,8 +213,6 @@ excludeHeaders = setOf(
 )
 ```
 
-**⚠️ Important:** Header matching is case-sensitive. Make sure the casing matches exactly how your SDK sends the headers.
-
 ### Skipping deduplication for one request
 
 Shared responses are read fully into memory before any caller sees them. Use `skipDeduplication()` for a response that must be streamed, such as a large download:
@@ -229,7 +227,7 @@ client.prepareGet("https://example.com/large-file.zip") {
 
 ## Debugging
 
-If deduplication isn't working as expected, check the actual header names sent by your SDK:
+If deduplication isn't working as expected, a header probably differs between requests. Log the headers to find it, then add it to `excludeHeaders`:
 
 ```kotlin
 val client = HttpClient {
@@ -237,7 +235,6 @@ val client = HttpClient {
         level = LogLevel.HEADERS
     }
     install(RequestDeduplication) {
-        // Add headers after verifying their exact casing
         excludeHeaders = setOf("X-Custom-Header")
     }
 }

@@ -29,17 +29,15 @@ import kotlinx.coroutines.withContext
  * Configuration for the request deduplication plugin.
  *
  * @property deduplicateMethods HTTP methods to deduplicate. Default: only GET
- * @property excludeHeaders Headers to exclude from cache key computation.
+ * @property excludeHeaders Headers to exclude from cache key computation, matched regardless of case.
  *                         These are typically tracing/telemetry headers that vary per request
  *                         and should not affect deduplication.
- *                         **Note:** Header matching is case-sensitive. Ensure the casing matches
- *                         exactly how your HTTP client/SDK sends the headers.
  */
 class RequestDeduplicationConfig {
     var deduplicateMethods: Set<HttpMethod> = setOf(Get)
 
     /**
-     * Headers to EXCLUDE from cache key computation (case-sensitive).
+     * Headers to EXCLUDE from cache key computation, matched regardless of case.
      * Empty by default - all headers are included in the cache key.
      *
      * Add tracing/telemetry headers that vary per request and should not affect deduplication.
@@ -51,10 +49,6 @@ class RequestDeduplicationConfig {
      * - Firebase: `X-Firebase-Locale`, `X-Firebase-Auth-Time`
      * - AWS: `X-Amzn-Trace-Id`
      * - Google Cloud: `X-Cloud-Trace-Context`
-     *
-     * **Important:** Header names must match exactly how they appear in the request.
-     * If your SDK uses different casing (e.g., "x-trace-id" vs "X-Trace-Id"),
-     * add both variants or check your SDK's documentation for the correct casing.
      */
     var excludeHeaders: Set<String> = emptySet()
 
@@ -164,9 +158,9 @@ class RequestDeduplicationConfig {
  * }
  * ```
  *
- * **Finding the correct header casing:**
- * If deduplication isn't working as expected, check the actual header names sent by your SDK.
- * You can temporarily log the headers to verify the exact casing:
+ * **Finding headers that vary:**
+ * If deduplication isn't working as expected, a header probably differs between requests.
+ * You can temporarily log the headers to find it:
  * ```kotlin
  * install(Logging) {
  *     level = LogLevel.HEADERS
@@ -180,6 +174,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
     val config = pluginConfig
     val mutex = Mutex()
     val inFlight = mutableMapOf<CacheKey, CompletableDeferred<HttpClientCall>>()
+    val excludedHeaders = config.excludeHeaders.mapTo(mutableSetOf(), String::lowercase)
 
     suspend fun Send.Sender.execute(request: HttpRequestBuilder): HttpClientCall = if (config.minWindow < 1) {
         proceed(request).save()
@@ -227,7 +222,7 @@ val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClien
         if (request.method !in config.deduplicateMethods || SkipDeduplication in request.attributes) {
             return@on proceed(request)
         }
-        val cacheKey = request.buildCacheKey(config) ?: return@on proceed(request)
+        val cacheKey = request.buildCacheKey(excludedHeaders) ?: return@on proceed(request)
         deduplicate(request, cacheKey)
     }
 }
@@ -266,7 +261,7 @@ private data class CacheKey(
  * a streamed body can be read only once, and WebSocket and SSE requests open a live connection
  * that cannot be shared, so all of them must go through on their own.
  */
-private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig): CacheKey? {
+private fun HttpRequestBuilder.buildCacheKey(excludedHeaders: Set<String>): CacheKey? {
     val content = body as? OutgoingContent ?: return null
     val bytes = when (content) {
         is EmptyContent -> emptyList()
@@ -276,9 +271,7 @@ private fun HttpRequestBuilder.buildCacheKey(config: RequestDeduplicationConfig)
     return CacheKey(
         method = method,
         url = url.buildString(),
-        headers = headers.entries()
-            .filter { (name, _) -> name !in config.excludeHeaders }
-            .associate { (name, values) -> name to values },
+        headers = headers.entries().associate { (name, values) -> name.lowercase() to values } - excludedHeaders,
         // The default transformers move Content-Type out of the request headers and into the body.
         contentType = content.contentType,
         body = bytes,
