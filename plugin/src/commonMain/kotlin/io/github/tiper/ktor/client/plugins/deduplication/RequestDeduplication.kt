@@ -242,7 +242,13 @@ private data class CacheKey(
     val contentHeaders: Map<String, List<String>>,
     val contentType: String?,
     val body: List<Byte>,
-)
+) {
+    // Hashing walks the whole body, so doing it once here keeps it out of the in-flight lock, which
+    // every request shares.
+    private val hash = listOf(method, url, headers, contentHeaders, contentType, body).hashCode()
+
+    override fun hashCode() = hash
+}
 
 /**
  * Returns `null` for a request that cannot be deduplicated. Only bodies that can be compared qualify:
