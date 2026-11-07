@@ -1,3 +1,5 @@
+import com.vanniktech.maven.publish.JavadocJar
+import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.SonatypeHost.Companion.CENTRAL_PORTAL
 import org.gradle.api.JavaVersion.VERSION_1_8
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
@@ -7,6 +9,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)
+    alias(libs.plugins.dokka)
     alias(libs.plugins.ktlint)
     alias(libs.plugins.vanniktech.maven.publish)
 }
@@ -131,7 +134,35 @@ android {
     }
 }
 
+// Turns the README into the landing page of the docs site.
+val dokkaModuleDoc by tasks.registering {
+    val readme = rootProject.file("README.md")
+    val moduleDoc = layout.buildDirectory.file("dokka/includes/Module.md")
+    inputs.file(readme)
+    outputs.file(moduleDoc)
+    doLast {
+        // Dokka can't render the badges, and its headings have no anchors for in-page links to land on.
+        val guide = readme.readLines().drop(1).filterNot { it.startsWith("[![") }.joinToString("\n").trimStart()
+            .replace(Regex("""\[([^]]+)]\(#[^)]+\)"""), "$1")
+        moduleDoc.get().asFile.writeText("# Module ktor-client-deduplication\n\n$guide")
+    }
+}
+
+dokka {
+    moduleName = "ktor-client-deduplication"
+    dokkaSourceSets.named("commonMain") {
+        includes.from(dokkaModuleDoc)
+        sourceLink {
+            localDirectory = file("src")
+            val ref = providers.environmentVariable("DOCS_SOURCE_REF").getOrElse("main")
+            remoteUrl("https://github.com/tiper/KtorRequestDeduplication/tree/$ref/plugin/src")
+        }
+    }
+}
+
 mavenPublishing {
+    // Keeps Dokka out of the published artifacts. It's only for the docs site.
+    configure(KotlinMultiplatform(javadocJar = JavadocJar.Empty(), androidVariantsToPublish = listOf("release")))
     publishToMavenCentral(CENTRAL_PORTAL)
     signAllPublications()
     coordinates(artifactId = "ktor-client-deduplication")
