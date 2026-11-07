@@ -239,20 +239,42 @@ fun HttpRequestBuilder.skipDeduplication() {
  * Holds copies, because a key must not change while it is in the in-flight map: callers can reuse a
  * body buffer, and plugins that run after this one can append to a header.
  */
-private data class CacheKey(
+private class CacheKey(
     val method: HttpMethod,
     val url: String,
     val headers: Map<String, List<String>>,
     val contentHeaders: Map<String, List<String>>,
     val contentType: String?,
-    val body: List<Byte>,
+    val body: ByteArray,
 ) {
-    // Hashing walks the whole body, so doing it once here keeps it out of the in-flight lock, which
-    // every request shares.
-    private val hash = listOf(method, url, headers, contentHeaders, contentType, body).hashCode()
+    // Doing this once here keeps it out of the in-flight lock, which every request shares.
+    private val hash = 31 * listOf(method, url, headers, contentHeaders, contentType).hashCode() + body.sampledHash()
 
     override fun hashCode() = hash
+
+    // Written by hand because a data class would compare the body array by reference.
+    override fun equals(other: Any?) = other is CacheKey &&
+        hash == other.hash &&
+        method == other.method &&
+        url == other.url &&
+        headers == other.headers &&
+        contentHeaders == other.contentHeaders &&
+        contentType == other.contentType &&
+        body.contentEquals(other.body)
 }
+
+/**
+ * Hashes at most about [MAX_HASHED_BYTES] of the body, because hashing every byte of a large body costs
+ * far more than copying or comparing it. Bodies that differ only in skipped bytes share a hash, which
+ * is safe: [CacheKey.equals] still compares every byte.
+ */
+private fun ByteArray.sampledHash(): Int {
+    var hash = size
+    for (i in indices step maxOf(1, size / MAX_HASHED_BYTES)) hash = 31 * hash + this[i]
+    return hash
+}
+
+private const val MAX_HASHED_BYTES = 4096
 
 /**
  * Returns `null` for a request that cannot be deduplicated. Only bodies that can be compared qualify:
@@ -262,8 +284,8 @@ private data class CacheKey(
 private fun HttpRequestBuilder.buildCacheKey(excludedHeaders: Set<String>): CacheKey? {
     val content = body as? OutgoingContent ?: return null
     val bytes = when (content) {
-        is EmptyContent -> emptyList()
-        is ByteArrayContent -> content.bytes().copyOf().asList()
+        is EmptyContent -> ByteArray(0)
+        is ByteArrayContent -> content.bytes().copyOf()
         else -> return null
     }
     return CacheKey(

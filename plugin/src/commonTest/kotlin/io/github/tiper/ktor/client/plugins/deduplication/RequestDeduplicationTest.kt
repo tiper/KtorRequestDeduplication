@@ -531,6 +531,45 @@ class RequestDeduplicationTest {
     }
 
     @Test
+    fun bodies_with_the_same_hash_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+        val bodies = listOf(byteArrayOf(0, 31), byteArrayOf(1, 0))
+        assertEquals(bodies[0].contentHashCode(), bodies[1].contentHashCode())
+
+        bodies.map { bytes ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(bytes)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(2, requestCount.value, "A hash collision must never share a response")
+    }
+
+    @Test
+    fun large_bodies_that_differ_in_one_byte_are_not_deduplicated() = runTest {
+        val requestCount = atomic(0)
+        val client = mockClient(config = { deduplicateMethods += Post }) {
+            "response-${requestCount.incrementAndGet()}"
+        }
+        val bodies = (0..2).map { changed -> ByteArray(1 shl 16).also { it[(1 shl 16) - 1 - changed] = 1 } } + listOf(ByteArray(1 shl 16))
+
+        bodies.map { bytes ->
+            async {
+                client.post("https://api.example.com/users") {
+                    setBody(bytes)
+                }
+            }
+        }.awaitAll()
+
+        assertEquals(4, requestCount.value, "Bodies that differ anywhere must never share a response")
+    }
+
+    @Test
     fun same_body_with_different_content_types_is_not_deduplicated() = runTest {
         val requestCount = atomic(0)
         val client = mockClient(config = { deduplicateMethods += Post }) {
