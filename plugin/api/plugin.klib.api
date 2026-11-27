@@ -1,0 +1,26 @@
+// Klib ABI Dump
+// Targets: [androidNativeArm32, androidNativeArm64, androidNativeX64, androidNativeX86, iosArm64, iosSimulatorArm64, iosX64, js, linuxArm64, linuxX64, macosArm64, macosX64, mingwX64, tvosArm64, tvosSimulatorArm64, tvosX64, wasmJs, watchosArm32, watchosArm64, watchosDeviceArm64, watchosSimulatorArm64, watchosX64]
+// Rendering settings:
+// - Signature version: 2
+// - Show manifest properties: true
+// - Show declarations: true
+
+// Library unique name: <io.github.tiper:plugin>
+final class io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig { // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig|null[0]
+    constructor <init>() // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.<init>|<init>(){}[0]
+
+    final var deduplicateMethods // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.deduplicateMethods|{}deduplicateMethods[0]
+        final fun <get-deduplicateMethods>(): kotlin.collections/Set<io.ktor.http/HttpMethod> // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.deduplicateMethods.<get-deduplicateMethods>|<get-deduplicateMethods>(){}[0]
+        final fun <set-deduplicateMethods>(kotlin.collections/Set<io.ktor.http/HttpMethod>) // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.deduplicateMethods.<set-deduplicateMethods>|<set-deduplicateMethods>(kotlin.collections.Set<io.ktor.http.HttpMethod>){}[0]
+    final var excludeHeaders // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.excludeHeaders|{}excludeHeaders[0]
+        final fun <get-excludeHeaders>(): kotlin.collections/Set<kotlin/String> // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.excludeHeaders.<get-excludeHeaders>|<get-excludeHeaders>(){}[0]
+        final fun <set-excludeHeaders>(kotlin.collections/Set<kotlin/String>) // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.excludeHeaders.<set-excludeHeaders>|<set-excludeHeaders>(kotlin.collections.Set<kotlin.String>){}[0]
+    final var minWindow // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.minWindow|{}minWindow[0]
+        final fun <get-minWindow>(): kotlin/Long // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.minWindow.<get-minWindow>|<get-minWindow>(){}[0]
+        final fun <set-minWindow>(kotlin/Long) // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig.minWindow.<set-minWindow>|<set-minWindow>(kotlin.Long){}[0]
+}
+
+final val io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplication // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplication|{}RequestDeduplication[0]
+    final fun <get-RequestDeduplication>(): io.ktor.client.plugins.api/ClientPlugin<io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplicationConfig> // io.github.tiper.ktor.client.plugins.deduplication/RequestDeduplication.<get-RequestDeduplication>|<get-RequestDeduplication>(){}[0]
+
+final fun (io.ktor.client.request/HttpRequestBuilder).io.github.tiper.ktor.client.plugins.deduplication/skipDeduplication() // io.github.tiper.ktor.client.plugins.deduplication/skipDeduplication|skipDeduplication@io.ktor.client.request.HttpRequestBuilder(){}[0]

@@ -387,3 +387,5 @@ limitations under the License.
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+The public API is recorded in `plugin/api`, and CI fails if it changes without an updated record. After an intended API change, run `./gradlew :plugin:apiDump` and commit the result.

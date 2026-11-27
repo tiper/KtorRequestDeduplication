@@ -9,6 +9,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)
+    alias(libs.plugins.binary.compatibility.validator)
     alias(libs.plugins.dokka)
     alias(libs.plugins.ktlint)
     alias(libs.plugins.vanniktech.maven.publish)
@@ -18,6 +19,7 @@ group = "io.github.tiper"
 version = "3.2.0"
 
 kotlin {
+    explicitApi()
 
     // JVM & Android
     jvm {
@@ -113,6 +115,15 @@ kotlin {
                 implementation(libs.slf4j.simple)
             }
         }
+    }
+}
+
+// Fails the build when the public API changes without an updated dump in plugin/api.
+// Run ./gradlew :plugin:apiDump after an intended change.
+apiValidation {
+    @OptIn(kotlinx.validation.ExperimentalBCVApi::class)
+    klib {
+        enabled = true
     }
 }
 
