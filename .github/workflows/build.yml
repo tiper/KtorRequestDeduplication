@@ -40,3 +40,7 @@ jobs:
       - name: Build
         run: |
           ./gradlew :plugin:assemble --no-daemon --stacktrace --no-configuration-cache
+
+      - name: Check public API
+        run: |
+          ./gradlew :plugin:apiCheck --no-daemon --stacktrace --no-configuration-cache

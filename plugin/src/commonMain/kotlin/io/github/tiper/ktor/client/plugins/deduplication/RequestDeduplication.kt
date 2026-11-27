@@ -33,8 +33,8 @@ import kotlinx.coroutines.withContext
  *                         These are typically tracing/telemetry headers that vary per request
  *                         and should not affect deduplication.
  */
-class RequestDeduplicationConfig {
-    var deduplicateMethods: Set<HttpMethod> = setOf(Get)
+public class RequestDeduplicationConfig {
+    public var deduplicateMethods: Set<HttpMethod> = setOf(Get)
 
     /**
      * Headers to EXCLUDE from cache key computation, matched regardless of case.
@@ -50,7 +50,7 @@ class RequestDeduplicationConfig {
      * - AWS: `X-Amzn-Trace-Id`
      * - Google Cloud: `X-Cloud-Trace-Context`
      */
-    var excludeHeaders: Set<String> = emptySet()
+    public var excludeHeaders: Set<String> = emptySet()
 
     /**
      * Minimum deduplication window (in milliseconds).
@@ -78,7 +78,7 @@ class RequestDeduplicationConfig {
      *
      * **Recommended:** Start with 50-100ms if you have very fast responses and measure the impact.
      */
-    var minWindow: Long = 0
+    public var minWindow: Long = 0
 }
 
 /**
@@ -156,7 +156,7 @@ class RequestDeduplicationConfig {
  * }
  * ```
  */
-val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClientPlugin(
+public val RequestDeduplication: ClientPlugin<RequestDeduplicationConfig> = createClientPlugin(
     "RequestDeduplication",
     ::RequestDeduplicationConfig,
 ) {
@@ -228,7 +228,7 @@ private val SkipDeduplication = AttributeKey<Unit>("SkipDeduplication")
  * }
  * ```
  */
-fun HttpRequestBuilder.skipDeduplication() {
+public fun HttpRequestBuilder.skipDeduplication() {
     attributes.put(SkipDeduplication, Unit)
 }
 

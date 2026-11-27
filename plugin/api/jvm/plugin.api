@@ -1,0 +1,15 @@
+public final class io/github/tiper/ktor/client/plugins/deduplication/RequestDeduplicationConfig {
+	public fun <init> ()V
+	public final fun getDeduplicateMethods ()Ljava/util/Set;
+	public final fun getExcludeHeaders ()Ljava/util/Set;
+	public final fun getMinWindow ()J
+	public final fun setDeduplicateMethods (Ljava/util/Set;)V
+	public final fun setExcludeHeaders (Ljava/util/Set;)V
+	public final fun setMinWindow (J)V
+}
+
+public final class io/github/tiper/ktor/client/plugins/deduplication/RequestDeduplicationKt {
+	public static final fun getRequestDeduplication ()Lio/ktor/client/plugins/api/ClientPlugin;
+	public static final fun skipDeduplication (Lio/ktor/client/request/HttpRequestBuilder;)V
+}
+
